@@ -66,6 +66,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
 
+      - name: Sync version from tag
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${GIT_TAG#v}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$GIT_TAG" ]; then
+            # 手动触发等无 tag 场景: 不改版本，按 pyproject.toml 原值构建
+            echo "No v* tag detected (ref: $GIT_TAG), skip version sync"
+          else
+            python .github/scripts/sync_version.py "$VERSION"
+          fi
+
       - name: Build ${{ matrix.name }}
         run: |
           cd "${{ matrix.dir }}"
