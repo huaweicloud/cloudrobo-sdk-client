@@ -1,0 +1,186 @@
+# ============================================================
+# GitHub Actions: 自动构建并发布 CloudRobo Client 全部包到 PyPI
+# 认证方式: PyPI Trusted Publishers (OIDC) — 无需 API Token
+# ============================================================
+#
+# 与 main 分支的按需（tag 前缀解析）发布不同，本 workflow 为全量发布：
+#   每次触发都会构建 packages/ 下全部分包 + 根目录主包 hw-cloudrobo-client，
+#   依次发布到 TestPyPI 和 PyPI，无需从 tag 匹配包名。
+#
+# 触发方式:
+#   1. 打 tag（推荐）: git tag v0.8.4 && git push origin v0.8.4
+#   2. 手动触发: Actions → Publish to PyPI → Run workflow
+#
+# 发布顺序:
+#   TestPyPI 分包 → TestPyPI 主包 → PyPI 分包 → PyPI 主包
+#   （分包先发，主包 hw-cloudrobo-client 依赖分包，最后发）
+#
+
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC Trusted Publishers 必需
+  contents: read    # 读取仓库代码
+
+jobs:
+  # ------------------------------------------------------------------
+  # Job 1: 并行构建全部分包和主包
+  # ------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # 某个包构建失败不取消其他包，便于定位问题
+      matrix:
+        include:
+          # ---- 分包（packages/ 目录）----
+          - { name: hw-cloudrobo-core,      dir: packages/cloudrobo-core }
+          - { name: hw-cloudrobo-asset,     dir: packages/cloudrobo-asset }
+          - { name: hw-cloudrobo-dataset,   dir: packages/cloudrobo-dataset }
+          - { name: hw-cloudrobo-train,     dir: packages/cloudrobo-train }
+          - { name: hw-cloudrobo-eval,      dir: packages/cloudrobo-eval }
+          - { name: hw-cloudrobo-infer,     dir: packages/cloudrobo-infer }
+          - { name: hw-cloudrobo-dispatch,  dir: packages/cloudrobo-dispatch }
+          - { name: hw-cloudrobo-workspace, dir: packages/cloudrobo-workspace }
+          - { name: hw-cloudrobo-resource,  dir: packages/cloudrobo-resource }
+          - { name: hw-cloudrobo-robot,     dir: packages/cloudrobo-robot }
+          - { name: hw-cloudrobo-r2c,       dir: packages/cloudrobo-r2c }
+          # ---- 主包（根目录，bundle 所有分包）----
+          - { name: hw-cloudrobo-client, dir: . }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build ${{ matrix.name }}
+        run: |
+          cd "${{ matrix.dir }}"
+          python -m build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: ${{ matrix.dir }}/dist/
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Job 2: 发布全部分包到 TestPyPI
+  # ------------------------------------------------------------------
+  publish-testpypi-packages:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - hw-cloudrobo-core
+          - hw-cloudrobo-asset
+          - hw-cloudrobo-dataset
+          - hw-cloudrobo-train
+          - hw-cloudrobo-eval
+          - hw-cloudrobo-infer
+          - hw-cloudrobo-dispatch
+          - hw-cloudrobo-workspace
+          - hw-cloudrobo-resource
+          - hw-cloudrobo-robot
+          - hw-cloudrobo-r2c
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+
+      - name: Publish ${{ matrix.package }} to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  # ------------------------------------------------------------------
+  # Job 3: 发布主包到 TestPyPI（分包发完再发）
+  # ------------------------------------------------------------------
+  publish-testpypi-main:
+    needs: [build, publish-testpypi-packages]
+    runs-on: ubuntu-latest
+    environment: testpypi
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-hw-cloudrobo-client
+          path: dist/
+
+      - name: Publish hw-cloudrobo-client to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  # ------------------------------------------------------------------
+  # Job 4: 发布全部分包到 PyPI（TestPyPI 全部成功后）
+  # ------------------------------------------------------------------
+  publish-pypi-packages:
+    needs: publish-testpypi-main
+    runs-on: ubuntu-latest
+    environment: pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - hw-cloudrobo-core
+          - hw-cloudrobo-asset
+          - hw-cloudrobo-dataset
+          - hw-cloudrobo-train
+          - hw-cloudrobo-eval
+          - hw-cloudrobo-infer
+          - hw-cloudrobo-dispatch
+          - hw-cloudrobo-workspace
+          - hw-cloudrobo-resource
+          - hw-cloudrobo-robot
+          - hw-cloudrobo-r2c
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+
+      - name: Publish ${{ matrix.package }} to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ------------------------------------------------------------------
+  # Job 5: 发布主包到 PyPI（分包发完再发）
+  # ------------------------------------------------------------------
+  publish-pypi-main:
+    needs: publish-pypi-packages
+    runs-on: ubuntu-latest
+    environment: pypi
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-hw-cloudrobo-client
+          path: dist/
+
+      - name: Publish hw-cloudrobo-client to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+

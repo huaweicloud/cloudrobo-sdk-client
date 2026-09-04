@@ -1,0 +1,142 @@
+schema_version: "v2.1"
+
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 20.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: true
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+hardware:
+  type: ros2
+  config:
+    node_name: r2c_jaka_mini2
+    spin_timeout_sec: 0.05
+    auto_spin: true
+    observation_sync: 
+      enabled: false
+      queue_size: 20
+      slop_sec: 0.05
+      allow_headerless: true
+    subscriptions:
+      joint_states:
+        topic: /jaka_driver/joint_position
+        msg_type: sensor_msgs.msg.JointState
+        qos: 10
+        max_update_hz: 10
+        sotre_as: joint_states
+        include_fileds: ["name", "position", "velocity", "effort"]
+        field_aliases:
+          name: names
+      gripper_states:
+        topic: /gripper_state
+        msg_type: std_msgs.msg.Float32
+        qos: 10
+        max_update_hz: 10
+        sotre_as: gripper_state
+      top:
+        topic: /camera_top/image_raw/compressed
+        msg_type: sensor_msgs.msg.CompressedImage
+        store_as: top
+        store_raw_message: true
+      wrist:
+        topic: /camera_wrist/image_raw/compressed
+        msg_type: sensor_msgs.msg.CompressedImage
+        store_as: wrist
+        store_raw_message: true
+    command_publishers:
+      gripper:
+        topic: /motor_control
+        msg_type: step_motor.msg.Motor
+        qos: 10
+      jaka_control:
+        topic: /robot_command_servo_j
+        msg_type: sensor_msgs.msg.JointState
+        qos: 10
+    default_command_publisher: jaka_control
+    action_targets:
+      gripper: gripper
+      jaka_control: jaka_control
+      
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  task: pick the block and place it on the plate
+  mappings:
+    - target_key: "joint_states.names"
+      default: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper_1"]
+
+    - target_key: "joint_states.position"
+      source_path: streams.joint_states.position
+      transforms: array_to_list
+
+    - target_key: "joint_states.position"
+      source_path: streams.gripper_states.data
+      target_index: 6
+
+    - target_key: "images.color.top"
+      source_path: "streams.top"
+      transforms: 
+        - ros_compressed_image_to_ndarray
+        - bgr_to_rgb
+        - ndarray_to_jpeg
+
+    - target_key: "images.color.wrist"
+      source_path: "streams.wrist"
+      transforms: 
+        - ros_compressed_image_to_ndarray
+        - bgr_to_rgb
+        - ndarray_to_jpeg
+
+r2c_to_device:
+  mappings:
+    - target: commands_by_publisher.jaka_control.data
+      source: joint_states.position
+      transforms: 
+        - slice:
+            start: 0
+            end: 6
+        - list_to_ros_joint_state
+
+    - target: commands_by_publisher.gripper.data
+      source: joint_states.position
+      source_index: 6
+      transforms: 
+        - scalar_to_step_motor_gripper_debounce:
+            consecutive_required: 10
+            open_threshold: 80.0
+            close_threshold: 20.0

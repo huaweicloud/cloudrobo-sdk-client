@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools==83.0.0", "packaging==26.2", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hw-cloudrobo-client"
+version = "0.1.0"
+description = "CloudRobo Client - All Packages Bundle"
+requires-python = ">=3.8"
+authors = [
+    {name = "Huawei Cloud CloudRobo Team", email = "hwcloudrobo@huawei.com"},
+]
+maintainers = [
+    {name = "Huawei Cloud CloudRobo Team", email = "hwcloudrobo@huawei.com"},
+]
+license = {text = "Apache-2.0"}
+readme = "README.md"
+keywords = [
+    "cloudrobo",
+    "embodied-ai",
+    "robotics",
+    "huawei-cloud",
+    "sdk",
+    "cli",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "hw-cloudrobo-core==0.1.0",
+    "hw-cloudrobo-asset==0.1.0",
+    "hw-cloudrobo-dataset==0.1.0",
+    "hw-cloudrobo-train==0.1.0",
+    "hw-cloudrobo-eval==0.1.0",
+    "hw-cloudrobo-infer==0.1.0",
+    "hw-cloudrobo-dispatch==0.1.0",
+    "hw-cloudrobo-workspace==0.1.0",
+    "hw-cloudrobo-resource==0.1.0",
+    "hw-cloudrobo-robot==0.1.0",
+    "hw-cloudrobo-r2c==0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/HuaweiCloud/CloudRobo-Client"
+Repository = "https://github.com/HuaweiCloud/CloudRobo-Client"
+Issues = "https://github.com/HuaweiCloud/CloudRobo-Client/issues"
+Changelog = "https://github.com/HuaweiCloud/CloudRobo-Client/blob/master/CHANGELOG.md"
+
+[tool.setuptools]
+packages = []
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line length handled by formatter
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311", "py312"]

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "ImageRawProto";
+option java_multiple_files = false;
+
+/**
+ * Raw Image Groups (Standard)
+ */
+message ImageGroups {
+  map<string, bytes> color = 1;
+  map<string, bytes> depth = 2;
+}
+

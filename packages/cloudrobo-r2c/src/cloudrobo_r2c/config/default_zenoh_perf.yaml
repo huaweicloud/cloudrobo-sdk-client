@@ -1,0 +1,21 @@
+publisher_reliability: RELIABLE
+publisher_congestion_control: DROP
+
+publisher_reliability_by_message:
+  observations: RELIABLE
+  actions: RELIABLE
+  joint_states: BEST_EFFORT
+  end_effector_states: BEST_EFFORT
+  localization_states: BEST_EFFORT
+  imu_states: BEST_EFFORT
+  heartbeats: BEST_EFFORT
+
+publisher_congestion_control_by_message:
+  observations: DROP
+  actions: DROP
+
+subscriber_handler_by_message: {}
+subscriber_handler_capacity_by_message: {}
+
+predeclare_keyexpr_enabled: false
+predeclare_keyexpr_by_message: []

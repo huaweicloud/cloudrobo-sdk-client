@@ -1,0 +1,272 @@
+# =============================================================================
+# SO101 主从臂 (BiSOFollower) R2C 配置文件 — schema v2.1
+#
+# 硬件拓扑 (sysfs 探测):
+#   JYU2C-2083 USB Camera (port 2): /dev/video0 (.0), /dev/video1 (.0 元数据)
+#   JYU2C-2083 USB Camera (port 3): /dev/video2 (.0), /dev/video3 (.0 元数据)
+#   Integrated Camera (port 13):    /dev/video4, /dev/video5 (笔记本内置,不用)
+#   串口: /dev/ttyACM0 (左臂), /dev/ttyACM1 (右臂)
+#
+# ⚠️ 使用前请确认:
+#   1. ACM0/ACM1 与 左臂/右臂 的对应关系 (插拔测试或用 dmesg | grep ttyACM)
+#   2. video0/video2 与 腕部/前部 的对应关系 (盖住镜头看哪个画面变黑)
+#   3. 安装 lerobot 可选依赖: uv sync --extra lerobot
+#
+# BiSOFollower 数据流:
+#   get_observation() → {left_shoulder_pan.pos, ..., right_shoulder_pan.pos, ...,
+#                         left_front(ndarray), left_wrist(ndarray), ...}
+#   send_action()     ← {left_shoulder_pan.pos: target, ..., right_shoulder_pan.pos: target}
+# =============================================================================
+
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 10.0
+  max_duration_s: 0.0
+  dry_run: false
+  action_response_timeout_s: 30.0
+  max_enqueue_actions_per_chunk: -1
+  enable_action_chunk_alignment: false
+  skip_initial_observations: 1
+
+  async_request:
+    enabled: true
+    publish_trigger_threshold: 10
+    fusion:
+      strategy: weighted_average
+      window_size: 10
+      state_types:
+        # 左臂 6 个关节
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        # 右臂 6 个关节
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+
+  heartbeat:
+    enabled: true
+    interval_ms: 5000
+    jitter_ms: 0
+    status: "ONLINE"
+    mode: "AUTO"
+
+  keyboard_control:
+    enabled: true
+
+# =============================================================================
+# 硬件适配器: LeRobot bi_so_follower (双臂从臂)
+# =============================================================================
+hardware:
+  type: "lerobot"
+  config:
+    robot:
+      type: bi_so_follower
+      id: bi_so101
+      calibration_dir: null
+
+      # ---- 左臂 (Left Arm) ----
+      left_arm_config:
+        port: /dev/ttyACM0
+        use_degrees: true
+        cameras:
+          # 前部相机 (顶部/前方视角) — 推测为 USB port 3 / video2
+          front:
+            type: opencv
+            index_or_path: /dev/video2
+            width: 640
+            height: 480
+            fps: 25
+          # 腕部相机 — 推测为 USB port 2 / video0
+          wrist:
+            type: opencv
+            index_or_path: /dev/video0
+            width: 640
+            height: 480
+            fps: 25
+
+      # ---- 右臂 (Right Arm) ----
+      # 通常只有主操作臂挂载相机，另一个臂 cameras 留空
+      right_arm_config:
+        port: /dev/ttyACM1
+        use_degrees: true
+        cameras: {}
+
+    commands:
+      go_home:
+        joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# =============================================================================
+# 数据翻译器
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 设备 -> R2C 映射 (上行)
+#
+# BiSOFollower.get_observation() 返回:
+#   关节:  left_shoulder_pan.pos, left_shoulder_lift.pos, left_elbow_flex.pos,
+#          left_wrist_flex.pos, left_wrist_roll.pos, left_gripper.pos
+#          right_shoulder_pan.pos, ... (共12个)
+#   相机:  left_front, left_wrist (, right_front, right_wrist 若配置)
+#
+# 映射: 12 维 joint_states.position = 左6 + 右6
+# =============================================================================
+device_to_r2c:
+  task: bimanual_manipulation_task
+  mappings:
+    # ---- 关节名称 (12 DOF) ----
+    - target_key: "joint_states.names"
+      default:
+        - "left_shoulder_pan"
+        - "left_shoulder_lift"
+        - "left_elbow_flex"
+        - "left_wrist_flex"
+        - "left_wrist_roll"
+        - "left_gripper"
+        - "right_shoulder_pan"
+        - "right_shoulder_lift"
+        - "right_elbow_flex"
+        - "right_wrist_flex"
+        - "right_wrist_roll"
+        - "right_gripper"
+
+    # ---- 12 维关节位置: 左6 + 右6 ----
+    - target_key: "joint_states.position"
+      source_paths:
+        - "left_shoulder_pan.pos"
+        - "left_shoulder_lift.pos"
+        - "left_elbow_flex.pos"
+        - "left_wrist_flex.pos"
+        - "left_wrist_roll.pos"
+        - "left_gripper.pos"
+        - "right_shoulder_pan.pos"
+        - "right_shoulder_lift.pos"
+        - "right_elbow_flex.pos"
+        - "right_wrist_flex.pos"
+        - "right_wrist_roll.pos"
+        - "right_gripper.pos"
+      use_lookup_dotted: false
+
+    # ---- 左臂前部相机 -> images.color.front ----
+    - target_key: "images.color.front"
+      source_path: "left_front"
+      transforms:
+        - rgb_to_bgr
+        - ndarray_to_webp:
+            quality: 70
+
+    # ---- 左臂腕部相机 -> images.color.wrist ----
+    - target_key: "images.color.wrist"
+      source_path: "left_wrist"
+      transforms:
+        - rgb_to_bgr
+        - ndarray_to_webp:
+            quality: 70
+
+    # ---- 右臂相机 (可选, 若右臂未配相机则自动跳过) ----
+    - target_key: "images.color.front_right"
+      source_path: "right_front"
+      required: false
+      transforms:
+        - rgb_to_bgr
+        - ndarray_to_webp:
+            quality: 70
+
+    - target_key: "images.color.wrist_right"
+      source_path: "right_wrist"
+      required: false
+      transforms:
+        - rgb_to_bgr
+        - ndarray_to_webp:
+            quality: 70
+
+# =============================================================================
+# R2C -> 设备映射 (下行)
+#
+# Cloud action joint_states.position (12 维 list) → 拆分到 12 个关节 .pos key
+# BiSOFollower.send_action() 自动去除 left_/right_ 前缀后转发给各子臂
+# =============================================================================
+r2c_to_device:
+  mappings:
+    # ---- 左臂 6 个关节 (source_index 0~5) ----
+    - target: "left_shoulder_pan.pos"
+      source: "joint_states.position"
+      source_index: 0
+      use_assign_dotted: false
+      required: true
+
+    - target: "left_shoulder_lift.pos"
+      source: "joint_states.position"
+      source_index: 1
+      use_assign_dotted: false
+      required: true
+
+    - target: "left_elbow_flex.pos"
+      source: "joint_states.position"
+      source_index: 2
+      use_assign_dotted: false
+      required: true
+
+    - target: "left_wrist_flex.pos"
+      source: "joint_states.position"
+      source_index: 3
+      use_assign_dotted: false
+      required: true
+
+    - target: "left_wrist_roll.pos"
+      source: "joint_states.position"
+      source_index: 4
+      use_assign_dotted: false
+      required: true
+
+    - target: "left_gripper.pos"
+      source: "joint_states.position"
+      source_index: 5
+      use_assign_dotted: false
+      required: true
+
+    # ---- 右臂 6 个关节 (source_index 6~11) ----
+    - target: "right_shoulder_pan.pos"
+      source: "joint_states.position"
+      source_index: 6
+      use_assign_dotted: false
+      required: true
+
+    - target: "right_shoulder_lift.pos"
+      source: "joint_states.position"
+      source_index: 7
+      use_assign_dotted: false
+      required: true
+
+    - target: "right_elbow_flex.pos"
+      source: "joint_states.position"
+      source_index: 8
+      use_assign_dotted: false
+      required: true
+
+    - target: "right_wrist_flex.pos"
+      source: "joint_states.position"
+      source_index: 9
+      use_assign_dotted: false
+      required: true
+
+    - target: "right_wrist_roll.pos"
+      source: "joint_states.position"
+      source_index: 10
+      use_assign_dotted: false
+      required: true
+
+    - target: "right_gripper.pos"
+      source: "joint_states.position"
+      source_index: 11
+      use_assign_dotted: false
+      required: true

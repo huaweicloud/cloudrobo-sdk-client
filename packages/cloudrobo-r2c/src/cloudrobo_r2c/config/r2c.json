@@ -1,0 +1,47 @@
+{
+    "model_feature_mapping": {
+        "input_features": {
+            "observation.state": {
+                "shape": [6],
+                "dtype": "float32",
+                "values": [
+                    "observation.joint_states.position@{joint_1}",
+                    "observation.joint_states.position@{joint_2}",
+                    "observation.joint_states.position@{joint_3}",
+                    "observation.joint_states.position@{joint_4}",
+                    "observation.joint_states.position@{joint_5}",
+                    "observation.joint_states.position@{joint_6}"
+                ]
+            },
+            "observation.images.front": {
+                "dtype": "float32",
+                "value": "observations.images.color.front"
+            },
+            "observation.images.wrist": {
+                "dtype": "float32",
+                "value": "observations.images.color.wrist"
+            },
+            "task":{
+                "type": "PROMPT"  
+            }
+        },
+        "output_features": {
+            "action": {
+                "chunk_size": 100,
+                "shape": [6],
+                "values": [
+                    "actions.joint_states.position@{joint_1}",
+                    "actions.joint_states.position@{joint_2}",
+                    "actions.joint_states.position@{joint_3}",
+                    "actions.joint_states.position@{joint_4}",
+                    "actions.joint_states.position@{joint_5}",
+                    "actions.joint_states.position@{joint_6}"
+                ]
+            }
+        }
+    },
+    "stop_condition": { 
+        "max_iter_num": 60,
+        "max_run_time": 5
+    }
+}

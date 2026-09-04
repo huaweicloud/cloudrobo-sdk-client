@@ -1,0 +1,81 @@
+# =============================================================================
+# Q25 Ultra 四足机器人云端配置文件
+# 用于:
+# - src/r2c_sdk/inference/r2c_cloud_adapter.py (OpenPI 在线推理)
+# - src/r2c_sdk/inference/r2c_policy_server.py (本地模型推理)
+# =============================================================================
+
+schema_version: "v2.2"
+service_name: "r2c_policy_runtime_q25"
+
+# 运行模式：
+# - openpi: r2c_cloud_adapter 使用 WebSocket 调用 OpenPI 服务
+# - local:  r2c_policy_server 使用本地 TorchScript 模型
+runtime:
+  backend: "local"
+
+# OpenPI 服务信息（仅 cloud_adapter 使用）
+openpi:
+  host: "ws://127.0.0.1"
+  port: 8000
+  api_key: ""
+
+# 本地模型信息（policy_server 必需；cloud_adapter 可忽略）
+model:
+  type: "lerobot_act"
+  # lerobot policy type, supports: act/diffusion/pi0/...
+  # if `type` is `lerobot_act`, server will resolve it to policy_type `act`
+  policy_type: "act"
+  # 模型路径（根据实际情况修改）
+  pretrained_model:
+    path: "/path_to_model"
+  # 兼容旧字段（若同时配置，pretrained_model.path 优先）
+  checkpoint_path: "/path_to_model"
+  device: "cuda:0"
+  fp16_inference: true
+  # whether to load and apply lerobot preprocessors and postprocessors
+  use_pre_post_processors: true
+  action_chunk_size: 50
+
+# 上行：Observations -> 模型输入
+r2c_to_model:
+  mappings:
+    # Q25 摄像头图像（如果启用）
+    - source_path: "images.color.camera"
+      target_key: "observation.images.camera"
+      transforms: ["jpeg_to_ndarray"]
+      required: false
+
+    # 关节位置 (12个关节)
+    - source_path: "joint_states.position"
+      target_key: "observation.state"
+      required: true
+
+    # 可选：IMU 数据作为额外输入
+    - source_path: "imu_state.orientation.roll"
+      target_key: "observation.imu.roll"
+      required: false
+
+    - source_path: "imu_state.orientation.pitch"
+      target_key: "observation.imu.pitch"
+      required: false
+
+    - source_path: "imu_state.orientation.yaw"
+      target_key: "observation.imu.yaw"
+      required: false
+
+    - source_path: "timestamp"
+      target_key: "meta.timestamp"
+
+    - source_path: "task"
+      target_key: "task"
+
+# 下行：模型输出 -> Actions
+model_to_r2c:
+  mappings:
+    # Q25 有12个关节输出
+    - source_tensor: "action"
+      target_key: "joint_states.position"
+      slice_start: 0
+      slice_end: 12
+      dtype: "float32"

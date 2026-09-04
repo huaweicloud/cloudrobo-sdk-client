@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=80", "grpcio-tools==1.80.0", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hw-cloudrobo-r2c"
+version = "0.1.0"
+description = "CloudRobo Robot-to-Cloud (R2C) data-plane SDK with Zenoh transport"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{name = "Huawei Cloud CloudRobo Team", email = "hwcloudrobo@huawei.com"}]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "PyYAML>=6.0",
+    "click>=8.0",
+    "hw-cloudrobo-core>=0.1.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+client = [
+    "eclipse-zenoh==1.9.0",
+    "protobuf==7.35.0",
+    "av==15.1.0",
+    "cryptography>=42,<46",
+    "numpy==1.26.2; python_version < '3.12'",
+    "numpy>=2.0,<2.5; python_version >= '3.12'",
+    "opencv-python-headless==4.11.0.86; python_version < '3.12'",
+    "opencv-python-headless==4.12.0.88; python_version >= '3.12'",
+]
+cloud-adapter = [
+    "eclipse-zenoh==1.9.0",
+    "protobuf==7.35.0",
+    "numpy==1.26.2; python_version < '3.12'",
+    "numpy>=2.0,<2.5; python_version >= '3.12'",
+]
+ur5e = [
+    "scipy>=1.13,<2.0",
+    "ur-rtde>=1.5",
+    "pyserial>=3.5",
+    "pyrealsense2>=2.56",
+]
+flexiv = [
+    "flexivrdk==1.9.0; platform_system == 'Linux' and platform_machine == 'x86_64' and python_version == '3.10'",
+]
+jaka = ["scipy>=1.13,<2.0"]
+a1z = ["python-can>=4.0", "pin"]
+all = ["hw-cloudrobo-r2c[client,cloud-adapter,ur5e,flexiv,jaka,a1z]"]
+
+[dependency-groups]
+dev = [
+    "build",
+    "pytest>=7.0",
+    "black",
+    "flake8",
+    "mypy",
+]
+
+[project.entry-points."cloudrobo.groups"]
+r2c = "cloudrobo_r2c.cli:r2c"
+
+[project.entry-points."r2c_sdk.adapters"]
+dummy = "cloudrobo_r2c.robots.dummy_robot:create_dummy_adapter"
+lerobot = "cloudrobo_r2c.robots.lerobot_hardware_adapter:create_lerobot_adapter"
+ros2 = "cloudrobo_r2c.robots.ros2_hardware_adapter:create_ros2_adapter"
+raw_sdk = "cloudrobo_r2c.robots.vendor_sdk_hardware_adapter:create_raw_sdk_adapter"
+jaka = "cloudrobo_r2c.robots.jaka.jaka_adapter:create_jaka_adapter"
+ur5e_rtde = "cloudrobo_r2c.robots.ur5e.ur5e_adapter:create_ur5e_adapter"
+zenoh_ros1 = "cloudrobo_r2c.robots.zenoh_ros1_adapter:create_zenoh_ros1_adapter"
+flexiv = "cloudrobo_r2c.robots.flexiv_hardware_adapter:create_flexiv_adapter"
+playback = "cloudrobo_r2c.robots.playback_adapter:create_playback_adapter"
+moz1 = "cloudrobo_r2c.robots.moz1_hardware_adapter:create_moz1_adapter"
+q25 = "cloudrobo_r2c.robots.q25.q25_hardware_adapter:create_q25_adapter"
+q25_ros2 = "cloudrobo_r2c.robots.q25_hardware_adapter:create_q25_ros2_adapter"
+tsd = "cloudrobo_r2c.robots.tsd.tsd_hardware_adapter:create_tsd_adapter"
+a1z = "cloudrobo_r2c.robots.a1z_hardware_adapter:create_a1z_adapter"
+
+[project.entry-points."r2c_sdk.transformers"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the config directory (and all subdirectories) inside the installed
+# package so users get the example configs after pip install.
+cloudrobo_r2c = ["config/**/*"]
+
+[tool.setuptools.cmdclass]
+compile_protobuf = "cloudrobo_r2c._build_commands.CompileProtobufCommand"
+build_py = "cloudrobo_r2c._build_commands.BuildPyWithProtobuf"
+egg_info = "cloudrobo_r2c._build_commands.EggInfoWithProtobuf"

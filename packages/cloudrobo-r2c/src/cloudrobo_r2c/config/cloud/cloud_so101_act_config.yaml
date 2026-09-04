@@ -1,0 +1,73 @@
+# =============================================================================
+# Cloud Config — UR5e ACT Policy
+#
+# 配合 r2c_lerobot_policy_server.py 使用，加载训练好的 ACT 模型，
+# 订阅边缘机器人 Observations，发布推理 Actions。
+# =============================================================================
+
+schema_version: "v2.2"
+service_name: "ur5e_act_policy"
+
+runtime:
+  backend: "local"
+  delay_return: 1.5             # 延迟返回 actions 的秒数，0=立即返回。用于模拟网络延迟测试。
+
+# 模型配置
+model:
+  type: "lerobot_act"
+  policy_type: "act"
+  pretrained_model:
+    path: "/path_to_model"
+  device: "cuda"
+  fp16_inference: true
+  use_pre_post_processors: true
+  action_chunk_size: 100        # 每次执行步数，<= 模型的 chunk_size (100)
+
+# =============================================================================
+# 上行映射: R2C Observations → 模型输入
+#
+# 模型期望的 input_features:
+#   observation.state:              STATE  (7,)
+#   observation.images.wrist:       VISUAL (3, 480, 640)
+#   observation.images.third_person:VISUAL (3, 480, 640)
+# =============================================================================
+# R2C Observations -> model input
+r2c_to_model:
+  mappings:
+    # Front camera image bytes -> ndarray
+    - source_path: "images.color.front"
+      target_key: "observation.images.front"
+      transforms: ["jpeg_to_ndarray"]
+      required: true
+
+    # Wrist camera image bytes -> ndarray (model expects "side" as feature name)
+    - source_path: "images.color.wrist"
+      target_key: "observation.images.side"
+      transforms: ["jpeg_to_ndarray"]
+      required: false
+
+    # 6-dim joint states used by SO101 policy
+    - source_path: "joint_states.position"
+      target_key: "observation.state"
+      slice_start: 0
+      slice_end: 6
+      required: true
+
+    # Optional task text (kept for condition-based policy)
+    - source_path: "task"
+      target_key: "task"
+      required: false
+
+    # Timestamp for tracing
+    - source_path: "timestamp"
+      target_key: "meta.timestamp"
+      required: false
+
+# Model output -> R2C Actions
+model_to_r2c:
+  mappings:
+    # policy output "action" expected shape [T, 6] — 模型已输出 6 维，无需 slice
+    # (slice_start/slice_end 会对第一维 [T] 切片，导致 chunk 截断)
+    - source_tensor: "action"
+      target_key: "joint_states.position"
+      dtype: "float32"

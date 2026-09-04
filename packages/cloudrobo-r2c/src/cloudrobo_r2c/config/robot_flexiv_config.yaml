@@ -1,0 +1,204 @@
+schema_version: "v2.1"
+
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 5
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+hardware:
+  type: "flexiv"
+  config:
+    # Flexiv 机器人序列号
+    robot_sn: "Rizon4-062833"
+
+    # dry_run: true
+
+    # 夹爪配置（从配置读取，不硬编码）
+    gripper_name: "Flexiv-GN01"
+    gripper_open_width: 0.09    # 夹爪完全打开宽度 (m)
+    gripper_close_width: 0.012  # 夹爪完全闭合宽度 (m)
+    gripper_velocity: 0.10
+    gripper_force_limit: 20.0
+
+    # 力传感器
+    zero_ft_on_start: false
+    force_limit_n: 20.0
+
+    # 力矩历史配置
+    force_history_len: 10    # 保留的历史帧数
+    force_history_freq: 30   # 力矩采样频率 (Hz)
+
+    # 摄像头配置
+    cameras:
+      wrist:
+        source: 6
+        width: 640
+        height: 480
+        fps: 30
+      third:
+        source: 14
+        width: 640
+        height: 480
+        fps: 30
+
+    # 命令配置
+    #commands:
+    #  go_home:
+    #    type: go_home
+    #    pose_euler: [0.5, 0.0, 0.3, 0.0, 3.14, 0.0]  # [x, y, z, roll, pitch, yaw]
+    #    gripper: 0.02    # 可选,夹爪目标宽度(m)
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  image_encoding: "jpeg"
+  mappings:
+    # 关节 names (101维：41基础 + 60力矩历史)
+    # 同时包含四元数和欧拉角，translator 选择使用
+    - target_key: "joint_states.names"
+      default: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6",
+                "dq_1", "dq_2", "dq_3", "dq_4", "dq_5", "dq_6",
+                "tau_1", "tau_2", "tau_3", "tau_4", "tau_5", "tau_6",
+                "tcp_x", "tcp_y", "tcp_z",
+                "tcp_qw", "tcp_qx", "tcp_qy", "tcp_qz",
+                "tcp_roll", "tcp_pitch", "tcp_yaw",
+                "wrench_raw_0", "wrench_raw_1", "wrench_raw_2", "wrench_raw_3", "wrench_raw_4", "wrench_raw_5",
+                "wrench_filtered_0", "wrench_filtered_1", "wrench_filtered_2", "wrench_filtered_3", "wrench_filtered_4", "wrench_filtered_5",
+                "gripper",
+                "wrench_raw-1_0", "wrench_raw-1_1", "wrench_raw-1_2", "wrench_raw-1_3", "wrench_raw-1_4", "wrench_raw-1_5",
+                "wrench_raw-2_0", "wrench_raw-2_1", "wrench_raw-2_2", "wrench_raw-2_3", "wrench_raw-2_4", "wrench_raw-2_5",
+                "wrench_raw-3_0", "wrench_raw-3_1", "wrench_raw-3_2", "wrench_raw-3_3", "wrench_raw-3_4", "wrench_raw-3_5",
+                "wrench_raw-4_0", "wrench_raw-4_1", "wrench_raw-4_2", "wrench_raw-4_3", "wrench_raw-4_4", "wrench_raw-4_5",
+                "wrench_raw-5_0", "wrench_raw-5_1", "wrench_raw-5_2", "wrench_raw-5_3", "wrench_raw-5_4", "wrench_raw-5_5",
+                "wrench_raw-6_0", "wrench_raw-6_1", "wrench_raw-6_2", "wrench_raw-6_3", "wrench_raw-6_4", "wrench_raw-6_5",
+                "wrench_raw-7_0", "wrench_raw-7_1", "wrench_raw-7_2", "wrench_raw-7_3", "wrench_raw-7_4", "wrench_raw-7_5",
+                "wrench_raw-8_0", "wrench_raw-8_1", "wrench_raw-8_2", "wrench_raw-8_3", "wrench_raw-8_4", "wrench_raw-8_5",
+                "wrench_raw-9_0", "wrench_raw-9_1", "wrench_raw-9_2", "wrench_raw-9_3", "wrench_raw-9_4", "wrench_raw-9_5",
+                "wrench_raw-10_0", "wrench_raw-10_1", "wrench_raw-10_2", "wrench_raw-10_3", "wrench_raw-10_4", "wrench_raw-10_5"]
+
+    # 关节位置 (101个字段)
+    - target_key: "joint_states.position"
+      source_paths: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6",
+                     "dq_1", "dq_2", "dq_3", "dq_4", "dq_5", "dq_6",
+                     "tau_1", "tau_2", "tau_3", "tau_4", "tau_5", "tau_6",
+                     "tcp_x", "tcp_y", "tcp_z",
+                     "tcp_qw", "tcp_qx", "tcp_qy", "tcp_qz",
+                     "tcp_roll", "tcp_pitch", "tcp_yaw",
+                     "wrench_raw_0", "wrench_raw_1", "wrench_raw_2", "wrench_raw_3", "wrench_raw_4", "wrench_raw_5",
+                     "wrench_filtered_0", "wrench_filtered_1", "wrench_filtered_2", "wrench_filtered_3", "wrench_filtered_4", "wrench_filtered_5",
+                     "gripper",
+                     "wrench_raw-1_0", "wrench_raw-1_1", "wrench_raw-1_2", "wrench_raw-1_3", "wrench_raw-1_4", "wrench_raw-1_5",
+                     "wrench_raw-2_0", "wrench_raw-2_1", "wrench_raw-2_2", "wrench_raw-2_3", "wrench_raw-2_4", "wrench_raw-2_5",
+                     "wrench_raw-3_0", "wrench_raw-3_1", "wrench_raw-3_2", "wrench_raw-3_3", "wrench_raw-3_4", "wrench_raw-3_5",
+                     "wrench_raw-4_0", "wrench_raw-4_1", "wrench_raw-4_2", "wrench_raw-4_3", "wrench_raw-4_4", "wrench_raw-4_5",
+                     "wrench_raw-5_0", "wrench_raw-5_1", "wrench_raw-5_2", "wrench_raw-5_3", "wrench_raw-5_4", "wrench_raw-5_5",
+                     "wrench_raw-6_0", "wrench_raw-6_1", "wrench_raw-6_2", "wrench_raw-6_3", "wrench_raw-6_4", "wrench_raw-6_5",
+                     "wrench_raw-7_0", "wrench_raw-7_1", "wrench_raw-7_2", "wrench_raw-7_3", "wrench_raw-7_4", "wrench_raw-7_5",
+                     "wrench_raw-8_0", "wrench_raw-8_1", "wrench_raw-8_2", "wrench_raw-8_3", "wrench_raw-8_4", "wrench_raw-8_5",
+                     "wrench_raw-9_0", "wrench_raw-9_1", "wrench_raw-9_2", "wrench_raw-9_3", "wrench_raw-9_4", "wrench_raw-9_5",
+                     "wrench_raw-10_0", "wrench_raw-10_1", "wrench_raw-10_2", "wrench_raw-10_3", "wrench_raw-10_4", "wrench_raw-10_5"]
+      # transforms: [{"subtract": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}]
+
+    # 摄像头图像
+    - target_key: "images.color.wrist"
+      source_path: "wrist"
+      transforms: ndarray_to_jpeg
+
+    - target_key: "images.color.third"
+      source_path: "third"
+      transforms: ["crop:bottom_left", "ndarray_to_jpeg"]
+
+r2c_to_device:
+  mappings:
+    # 将云端动作映射为 Flexiv 可识别的命令
+    # 动作格式：TCP位置(3) + TCP四元数(4) + 夹爪(1) = 8维
+    - target: "tcp_x"
+      source: "joint_states.position"
+      source_index: 0
+      use_assign_dotted: false
+      required: true
+    - target: "tcp_y"
+      source: "joint_states.position"
+      source_index: 1
+      use_assign_dotted: false
+      required: true
+    - target: "tcp_z"
+      source: "joint_states.position"
+      source_index: 2
+      use_assign_dotted: false
+      required: true
+    # 欧拉角控制控制
+    - target: "tcp_roll"
+      source: "joint_states.position"
+      source_index: 3
+      use_assign_dotted: false
+      required: true
+    - target: "tcp_pitch"
+      source: "joint_states.position"
+      source_index: 4
+      use_assign_dotted: false
+      required: true
+    - target: "tcp_yaw"
+      source: "joint_states.position"
+      source_index: 5
+      use_assign_dotted: false
+      required: true
+    # 四元数控制
+    # - target: "tcp_qw"
+    #   source: "joint_states.position"
+    #   source_index: 3
+    #   use_assign_dotted: false
+    #   required: true
+    # - target: "tcp_qx"
+    #   source: "joint_states.position"
+    #   source_index: 4
+    #   use_assign_dotted: false
+    #   required: true
+    # - target: "tcp_qy"
+    #   source: "joint_states.position"
+    #   source_index: 5
+    #   use_assign_dotted: false
+    #   required: true
+    # - target: "tcp_qz"
+    #   source: "joint_states.position"
+    #   source_index: 6
+    #   use_assign_dotted: false
+    #   required: true
+    - target: "gripper"
+      source: "joint_states.position"
+      source_index: -1
+      use_assign_dotted: false
+      required: true

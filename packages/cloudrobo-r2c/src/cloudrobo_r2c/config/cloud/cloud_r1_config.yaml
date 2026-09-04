@@ -1,0 +1,78 @@
+# =============================================================================
+# Cloud Config — R1 ACT Policy (本地 LeRobot 推理)
+#
+# 配合 r2c_lerobot_policy_server.py 使用，加载训练好的 ACT 模型，
+# 订阅边缘机器人 Observations，发布推理 Actions。
+# =============================================================================
+
+schema_version: "v2.2"
+service_name: "r1_act_policy"
+
+runtime:
+  backend: "openpi"
+openpi:
+  host: "ws://192.168.6.2"
+  port: 8256
+  api_key: ""
+
+
+# 模型配置
+model:
+  type: "lerobot_act"
+  policy_type: "act"
+  pretrained_model:
+    path: "/path_to_model"
+  device: "cuda"
+  fp16_inference: true
+  use_pre_post_processors: true
+  action_chunk_size: 50
+
+# =============================================================================
+# 上行映射: R2C Observations → 模型输入
+#
+# 模型期望的 input_features:
+#   observation.state:              STATE  (7,)
+#   observation.images.wrist:       VISUAL (3, 480, 640)
+#   observation.images.third_person:VISUAL (3, 480, 640)
+#
+# R1 提供的 observation keys:
+#   images.color.front       — 头部相机
+#   images.color.wrist_left  — 左腕相机
+#   images.color.wrist_right — 右腕相机
+#   joint_states.position    — 7D 状态向量
+# =============================================================================
+r2c_to_model:
+  mappings:
+    # 头部相机 → 模型第三人称视角
+    - source_path: "images.color.front"
+      target_key: "images.front"
+      transforms: ["jpeg_to_ndarray"]
+
+    # 左腕相机 → 模型腕部视角 (模型只支持单腕)
+    - source_path: "images.color.wrist_left"
+      target_key: "images.wrist_left"
+      transforms: ["jpeg_to_ndarray"]
+    - source_path: "images.color.wrist_right"
+      target_key: "images.wrist_right"
+      transforms: ["jpeg_to_ndarray"]
+
+    # 状态向量 (6 关节位置 + 1 夹爪 = 7 维)
+    - source_path: "joint_states.position"
+      target_key: "state"
+      transforms: ["list_to_ndarray"]
+      required: true
+
+    # task → prompt (服务器 preprocess_observation 需要)
+    - target_key: "prompt"
+      default: "pick the cube"
+      required: false
+
+# =============================================================================
+# 下行映射: 模型输出 → R2C Actions
+#
+# 模型输出 action (7,) = [joint_0, ..., joint_5, gripper]
+# =============================================================================
+model_to_r2c:
+  mappings:
+    - source_tensor: "actions"
+      target_key: "joint_states.position"

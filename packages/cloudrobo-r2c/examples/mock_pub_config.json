@@ -1,0 +1,43 @@
+{
+  "observation": {
+    "enabled": true,
+    "rate_hz": 1.0,
+    "image_encode": "raw"
+  },
+  "action": {
+    "enabled": true,
+    "rate_hz": 0.5
+  },
+  "joint_state": {
+    "enabled": true,
+    "rate_hz": 5.0
+  },
+  "end_effector_state": {
+    "enabled": true,
+    "rate_hz": 2.0
+  },
+  "localization_state": {
+    "enabled": true,
+    "rate_hz": 2.0
+  },
+  "imu_state": {
+    "enabled": true,
+    "rate_hz": 1.0
+  },
+  "heartbeat": {
+    "enabled": true,
+    "rate_hz": 1.0
+  },
+  "schema_observation": {
+    "enabled": true,
+    "rate_hz": 2.0
+  },
+  "action_chunk": {
+    "enabled": false,
+    "rate_hz": 1.0
+  },
+  "robot_meta": {
+    "enabled": true,
+    "rate_hz": 0.2
+  }
+}

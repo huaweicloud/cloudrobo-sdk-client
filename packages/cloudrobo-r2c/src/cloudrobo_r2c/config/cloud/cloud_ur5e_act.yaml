@@ -1,0 +1,63 @@
+# =============================================================================
+# Cloud Config — UR5e ACT Policy
+#
+# 配合 r2c_lerobot_policy_server.py 使用，加载训练好的 ACT 模型，
+# 订阅边缘机器人 Observations，发布推理 Actions。
+# =============================================================================
+
+schema_version: "v2.2"
+service_name: "ur5e_act_policy"
+
+runtime:
+  backend: "local"
+
+# 模型配置
+model:
+  type: "lerobot_act"
+  policy_type: "act"
+  pretrained_model:
+    path: "/path_to_model"
+  device: "cuda"
+  fp16_inference: true
+  use_pre_post_processors: true
+  action_chunk_size: 50        # 每次执行步数，<= 模型的 chunk_size (100)
+
+# =============================================================================
+# 上行映射: R2C Observations → 模型输入
+#
+# 模型期望的 input_features:
+#   observation.state:              STATE  (7,)
+#   observation.images.wrist:       VISUAL (3, 480, 640)
+#   observation.images.third_person:VISUAL (3, 480, 640)
+# =============================================================================
+r2c_to_model:
+  mappings:
+    # 第三人称相机: 从 R2C 压缩图像解码为 ndarray
+    - source_path: "images.color.third_person"
+      target_key: "observation.images.third_person"
+      transforms: ["jpeg_to_ndarray"]
+      use_assign_dotted: false
+
+    # 腕部相机
+    - source_path: "images.color.wrist"
+      target_key: "observation.images.wrist"
+      transforms: ["jpeg_to_ndarray"]
+      use_assign_dotted: false
+
+    # 状态向量 (6 关节位置 + 1 夹爪 = 7 维)
+    - source_path: "joint_states.position"
+      target_key: "observation.state"
+      required: true
+      use_assign_dotted: false
+
+# =============================================================================
+# 下行映射: 模型输出 → R2C Actions
+#
+# 模型输出 action (7,) = [joint_0, ..., joint_5, gripper]
+# =============================================================================
+model_to_r2c:
+  mappings:
+    - source_tensor: "action"
+      target_key: "joint_states.position"
+      dtype: "float32"
+

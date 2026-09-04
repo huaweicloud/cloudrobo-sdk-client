@@ -1,0 +1,113 @@
+schema_version: "v2.1"
+
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 20.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+hardware:
+  # 使用内置 DummyRobotHardwareAdapter
+  type: "dummy"
+  config:
+    joint_names:
+      - "joint_1"
+      - "joint_2"
+      - "joint_3"
+      - "joint_4"
+      - "joint_5"
+      - "joint_6"
+      - "gripper_1"
+    initial_joint_positions: [0.0, 0.1, -0.2, 0.0, 0.0, 0.5, 100.0]
+    max_joint_speed_rad_s: 1.5
+    image_specs:
+      top:
+        h: 480
+        w: 640
+        c: 3
+      wrist:
+        h: 240
+        w: 320
+        c: 3
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  task: pick the pen to the box
+  mappings:
+    - target_key: "joint_states.names"
+      default: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper_1"]
+
+    - target_key: "joint_states.position"
+      source_paths: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper_1"]
+
+    - target_key: "images.color.top"
+      source_path: "top"
+      transforms: ndarray_to_jpeg
+
+    - target_key: "images.color.wrist"
+      source_path: "wrist"
+      transforms: ndarray_to_jpeg
+
+r2c_to_device:
+  mappings:
+    # 将云端动作映射为 Dummy adapter 可识别的命令
+    - target: "joint_1"
+      source: "joint_states.position"
+      source_index: 0
+      required: true
+    - target: "joint_2"
+      source: "joint_states.position"
+      source_index: 1
+      required: true
+    - target: "joint_3"
+      source: "joint_states.position"
+      source_index: 2
+      required: true
+    - target: "joint_4"
+      source: "joint_states.position"
+      source_index: 3
+      required: true
+    - target: "joint_5"
+      source: "joint_states.position"
+      source_index: 4
+      required: true
+    - target: "joint_6"
+      source: "joint_states.position"
+      source_index: 5
+      required: true
+    - target: "gripper_1"
+      source: "joint_states.position"
+      source_index: 6
+      required: true

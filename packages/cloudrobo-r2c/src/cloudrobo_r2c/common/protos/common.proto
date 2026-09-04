@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "CommonProto";
+option java_multiple_files = false;
+
+// 7-dimensional pose [tx, ty, tz, qx, qy, qz, qw]
+message Pose7D {
+  repeated double data = 1;
+}
+
+// 7-dimensional pose with frame name
+message StampedPose7D {
+  string frame_id = 1;
+  Pose7D pose = 2;
+}
+
+// 3D vector [x, y, z]
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Quaternion [x, y, z, w]
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+message PoseWithCovariance {
+  // 7-dimensional pose [tx, ty, tz, qx, qy, qz, qw]
+  Pose7D pose = 1;
+
+  // Row-major representation of the 6x6 covariance matrix (36 elements)
+  repeated double covariance = 2;
+}
+
+// ── Extension mechanism ───────────────────────────────────────────
+
+enum DType {
+  DTYPE_UNSPECIFIED = 0;
+  FLOAT32 = 1;
+  FLOAT64 = 2;
+  INT32 = 3;
+  INT64 = 4;
+  UINT8 = 5;
+  BOOL = 6;
+  STRING = 7;
+  BYTES = 8;
+}
+
+message ExtensionValue {
+  // Element type (required — self-describing)
+  DType dtype = 1;
+
+  // Tensor shape ([] = scalar, [N] = 1D, [H,W] = 2D, [H,W,C] = image)
+  repeated int32 shape = 2;
+
+  // Raw data payload (flat row-major bytes)
+  bytes data = 3;
+
+  // Optional MIME type for encoded content (e.g. "image/jpeg", "image/png")
+  string mime_type = 4;
+}

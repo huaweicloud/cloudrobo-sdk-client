@@ -1,0 +1,214 @@
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 100.0  # 与 C++ demo 轴值控制频率一致 (100Hz)
+  max_duration_s: 0.0
+  action_response_timeout_s: 5.0
+
+hardware:
+  type: "q25"
+  config:
+    # Q25 Ultra 四足机器人配置
+    robot_ip: "192.168.3.20"       # 机器人控制指令 IP
+    camera_ip: "192.168.1.102"     # 摄像头 RTSP 流 IP
+    robot_port: 43893
+    listen_port: 43893
+
+    # 观测数据发布频率 (Hz)
+    observation_rate_hz: 10.0
+
+    # 摄像头配置
+    camera_enabled: true
+    camera_locations: ["main_cam", "front_cam", "back_cam"]  # 启用的摄像头列表
+    rtsp_port: 8554  # RTSP 流端口
+    camera_timeout_ms: 5000  # 摄像头连接超时 (毫秒) 
+
+    # 调试模式：只接受并打印 action，不执行实际动作
+    dry_run: true
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  image_encoding: "jpeg"
+  mappings:
+    # Q25 关节名称 (12个关节：每条腿3个)
+    # FL=前左, FR=前右, BL=后左, BR=后右
+    - target_key: "joint_states.names"
+      default: ["FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+               "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+               "BL_hip_joint", "BL_thigh_joint", "BL_calf_joint",
+               "BR_hip_joint", "BR_thigh_joint", "BR_calf_joint"]
+
+    # 关节位置 (12个关节)
+    - target_key: "joint_states.position"
+      source_paths: ["FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+                     "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+                     "BL_hip_joint", "BL_thigh_joint", "BL_calf_joint",
+                     "BR_hip_joint", "BR_thigh_joint", "BR_calf_joint"]
+
+    # 关节速度
+    - target_key: "joint_states.velocity"
+      source_paths: ["FL_hip_joint_vel", "FL_thigh_joint_vel", "FL_calf_joint_vel",
+                     "FR_hip_joint_vel", "FR_thigh_joint_vel", "FR_calf_joint_vel",
+                     "BL_hip_joint_vel", "BL_thigh_joint_vel", "BL_calf_joint_vel",
+                     "BR_hip_joint_vel", "BR_thigh_joint_vel", "BR_calf_joint_vel"]
+
+    # 关节力矩
+    - target_key: "joint_states.torque"
+      source_paths: ["FL_hip_joint_torque", "FL_thigh_joint_torque", "FL_calf_joint_torque",
+                     "FR_hip_joint_torque", "FR_thigh_joint_torque", "FR_calf_joint_torque",
+                     "BL_hip_joint_torque", "BL_thigh_joint_torque", "BL_calf_joint_torque",
+                     "BR_hip_joint_torque", "BR_thigh_joint_torque", "BR_calf_joint_torque"]
+
+    # 额外观测数据：通过 end_effector_states 传递
+    # 包含 IMU、摇杆、CPU 等所有数值型额外数据
+    # names 标记字段名称，position 存储对应的数值
+    - target_key: "end_effector_states.names"
+      default: ["imu_roll", "imu_pitch", "imu_yaw",
+               "imu_angular_velocity_x", "imu_angular_velocity_y", "imu_angular_velocity_z",
+               "imu_acceleration_x", "imu_acceleration_y", "imu_acceleration_z",
+               "joystick_lx", "joystick_ly", "joystick_rx", "joystick_ry",
+               "cpu_temperature", "cpu_frequency",
+               "gait_code", "basic_code",
+               "FL_hip_joint_motor_temp", "FL_thigh_joint_motor_temp", "FL_calf_joint_motor_temp",
+               "FR_hip_joint_motor_temp", "FR_thigh_joint_motor_temp", "FR_calf_joint_motor_temp",
+               "BL_hip_joint_motor_temp", "BL_thigh_joint_motor_temp", "BL_calf_joint_motor_temp",
+               "BR_hip_joint_motor_temp", "BR_thigh_joint_motor_temp", "BR_calf_joint_motor_temp"]
+
+    # 对应的数值
+    - target_key: "end_effector_states.position"
+      source_paths: ["imu_roll", "imu_pitch", "imu_yaw",
+                    "imu_angular_velocity_x", "imu_angular_velocity_y", "imu_angular_velocity_z",
+                    "imu_acceleration_x", "imu_acceleration_y", "imu_acceleration_z",
+                    "joystick_lx", "joystick_ly", "joystick_rx", "joystick_ry",
+                    "cpu_temperature", "cpu_frequency",
+                    "gait_code", "basic_code",
+                    "FL_hip_joint_motor_temp", "FL_thigh_joint_motor_temp", "FL_calf_joint_motor_temp",
+                    "FR_hip_joint_motor_temp", "FR_thigh_joint_motor_temp", "FR_calf_joint_motor_temp",
+                    "BL_hip_joint_motor_temp", "BL_thigh_joint_motor_temp", "BL_calf_joint_motor_temp",
+                    "BR_hip_joint_motor_temp", "BR_thigh_joint_motor_temp", "BR_calf_joint_motor_temp"]
+      required: false
+    # main_cam 摄像头
+    - target_key: "images.color.main_cam"
+      source_path: "camera_main_cam"
+      modality: "image"
+      dtype: "uint8"
+      shape: [480, 640, 3]
+      encode: "jpeg"
+      transforms:
+        - ndarray_to_jpeg
+      required: false
+    # front_cam 摄像头
+    - target_key: "images.color.front_cam"
+      source_path: "camera_front_cam"
+      modality: "image"
+      dtype: "uint8"
+      shape: [480, 640, 3]
+      encode: "jpeg"
+      transforms:
+        - ndarray_to_jpeg
+      required: false
+    # back_cam 摄像头
+    - target_key: "images.color.back_cam"
+      source_path: "camera_back_cam"
+      modality: "image"
+      dtype: "uint8"
+      shape: [480, 640, 3]
+      encode: "jpeg"
+      transforms:
+        - ndarray_to_jpeg
+      required: false
+
+r2c_to_device:
+  mappings:
+    # Q25 支持的动作控制：
+    # 1. stand/lie: 站立/趴下
+    # 2. gait: 步态 (walk/run)
+    # 3. height: 高度 (0/1/2)
+    # 4. emergency_stop: 急停
+    # 5. 轴控制: left_x, left_y, right_x, right_y
+    #
+    # 使用 end_effector_states.position 传递控制命令
+    # 位置映射：
+    #   position[0]: stand (True=站立)
+    #   position[1]: lie (True=趴下)
+    #   position[2]: emergency_stop (True=急停)
+    #   position[3]: gait (0=walk, 1=run)
+    #   position[4]: height (0=低, 1=中, 2=高)
+    #   position[5]: left_x (-1000~1000)
+    #   position[6]: left_y (-1000~1000)
+    #   position[7]: right_x (-1000~1000)
+    #   position[8]: right_y (-1000~1000)
+
+    # 站立命令 (使用 end_effector_states.position[0])
+    - target: "stand"
+      source: "end_effector_states.position"
+      source_index: 0
+      use_assign_dotted: false
+      required: false
+      default_value: false
+
+    # 趴下命令 (使用 end_effector_states.position[1])
+    - target: "lie"
+      source: "end_effector_states.position"
+      source_index: 1
+      use_assign_dotted: false
+      required: false
+      default_value: false
+
+    # 急停命令 (使用 end_effector_states.position[2])
+    - target: "emergency_stop"
+      source: "end_effector_states.position"
+      source_index: 2
+      use_assign_dotted: false
+      required: false
+      default_value: false
+
+    # 步态切换: walk=0, run=1 (使用 end_effector_states.position[3])
+    - target: "gait"
+      source: "end_effector_states.position"
+      source_index: 3
+      use_assign_dotted: false
+      required: false
+      default_value: 0
+
+    # 高度调节: 0=低, 1=中, 2=高 (使用 end_effector_states.position[4])
+    - target: "height"
+      source: "end_effector_states.position"
+      source_index: 4
+      use_assign_dotted: false
+      required: false
+      default_value: 1
+
+    # 左摇杆 X 轴 (左移/右移) (使用 end_effector_states.position[5])
+    - target: "left_x"
+      source: "end_effector_states.position"
+      source_index: 5
+      use_assign_dotted: false
+      required: false
+      default_value: 0
+
+    # 左摇杆 Y 轴 (前进/后退) (使用 end_effector_states.position[6])
+    - target: "left_y"
+      source: "end_effector_states.position"
+      source_index: 6
+      use_assign_dotted: false
+      required: false
+      default_value: 0
+
+    # 右摇杆 X 轴 (左转/右转) (使用 end_effector_states.position[7])
+    - target: "right_x"
+      source: "end_effector_states.position"
+      source_index: 7
+      use_assign_dotted: false
+      required: false
+      default_value: 0
+
+    # 右摇杆 Y 轴 (使用 end_effector_states.position[8])
+    - target: "right_y"
+      source: "end_effector_states.position"
+      source_index: 8
+      use_assign_dotted: false
+      required: false
+      default_value: 0

@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "HeartbeatProto";
+option java_multiple_files = false;
+
+message Heartbeat {
+  // Timestamp of the heartbeat
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Source of the state message (e.g., "robot", "simulator", "edge_gateway")
+  string source = 2;
+
+  // System status (e.g., "RUNNING", "IDLE", "ERROR")
+  string status = 3;
+
+  // Operation mode (e.g., "AUTONOMOUS", "MANUAL")
+  string mode = 4;
+
+  // List of active error codes
+  repeated int32 error_code = 5;
+
+  // Battery information
+  BatteryStatus battery = 6;
+}
+
+message BatteryStatus {
+  // Battery percentage [0.0, 100.0]
+  double percentage = 1;
+
+  // Voltage in Volts
+  double voltage = 2;
+
+  // Current in Amperes
+  double current = 3;
+}

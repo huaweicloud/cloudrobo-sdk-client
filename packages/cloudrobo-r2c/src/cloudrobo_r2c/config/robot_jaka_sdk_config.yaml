@@ -1,0 +1,227 @@
+# =============================================================================
+# R2C Edge Configuration — JAKA Mini2 (JakaHardwareAdapter)
+#
+# 描述: JAKA Mini2 协作机器人 SDK 直连配置。
+#       适配器类型 jaka，通过 jkrc SDK 控制机器人。
+#
+# 配合 cloud_jaka_config.yaml 使用:
+#   1. 启动推理服务 (云端):
+#        uv run python -m r2c_sdk.inference.r2c_lerobot_policy_server \
+#          --cloud-config config/cloud_jaka_config.yaml \
+#          --client-config config/client_config.yaml \
+#          --project-id test-tenant --device-id jaka-001
+#   2. 启动边缘端 (本配置):
+#        uv run python -m r2c_sdk.cloudroboclient \
+#          --client-config config/client_config.yaml \
+#          --robot-config config/robot_jaka_sdk_config.yaml
+#
+# 前置条件:
+#   - JAKA Mini2 控制器 IP 可达 (默认 192.168.1.101)
+#   - JAKA Python SDK (jkrc) 已安装
+#   - Zenoh router 处于运行状态 (如需 router 模式)
+# =============================================================================
+
+schema_version: "v2.1"
+
+# =============================================================================
+# 运行时配置
+# =============================================================================
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 20.0
+
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。
+  # 适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景。
+  dry_run: false
+
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+
+
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+# =============================================================================
+# 硬件适配器: JAKA Mini2 (SDK 直连)
+# =============================================================================
+hardware:
+  type: jaka
+  config:
+    # ── 连接 ──────────────────────────────────────────────────────────
+    ip: "192.168.1.101"       # 机器人控制器 IP
+    robot_id: 0               # JAKA SDK 机器人标识 (单机器人保持 0)
+
+    # ── 控制模式 ──────────────────────────────────────────────────────
+    # "joint" (默认): servo_j + IK，适合推理输出的绝对关节角
+    # "cartesian": servo_p 直驱，适合 Cartesian 动作
+    control_mode: "joint"
+    frequency: 125            # daemon 伺服循环 Hz
+    servo_move_mode: 0        # servo_j 模式: 0 = 绝对位置
+    do_info: [0, 0, 0]        # 数字输出状态
+
+    # ── 运动速度 ──────────────────────────────────────────────────────
+    max_joint_speed: 1.0      # rad/s — joint 模式计算 ramp 时长
+    max_pos_speed: 0.25       # Cartesian 模式最大线速度 (m/s 等效)
+    max_rot_speed: 0.6        # Cartesian 模式最大角速度 (rad/s)
+
+    # ── 可选: 连接后自动归位 ──────────────────────────────────────────
+    # init_joints: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+
+    # ── SDK 路径 (用于预加载 libjakaAPI.so + import jkrc) ─────────────
+    sdk_dir: "/home/robot/suhanwu/jaka_sdk"
+
+    # ── 可选: OpenCV 相机 ─────────────────────────────────────────────
+    # 按实际硬件配置。适配器将帧存入 observation["<name>"]。
+    cameras:
+      wrist:
+        type: "opencv"
+        index_or_path: 2       # /dev/video0
+        width: 640
+        height: 480
+        fps: 30
+      top:
+        type: "opencv"
+        index_or_path: 4       # /dev/video2
+        width: 640
+        height: 480
+        fps: 30
+
+    # ── 可选: 步进电机夹爪 ─────────────────────────────────────────────
+    gripper:
+      serial_port: "/dev/ttyACM0"
+      baudrate: 115200
+
+    # ── go_home 命令 (键盘 空格→暂停 → h→归位) ────────────────────────
+    commands:
+      go_home:
+        # Jaka 是 6-DOF，gripper 走独立通道。joints 非6值时告警并截断。
+        joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        # gripper 仅支持 "open"/"close" (步进电机无米单位)
+        gripper: "open"
+
+# =============================================================================
+# 设备翻译器: 配置驱动映射
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 上行映射: Jaka 原始观测 → R2C Observations
+#
+# JakaHardwareAdapter.get_observation() 输出:
+#   - joint_names:        ["joint_1", ..., "joint_6"]
+#   - joint_positions:    [j1, ..., j6]      (ndarray)
+#   - joint_1 ~ joint_6:  各关节单独值
+#   - tcp_pose:           [x,y,z,rx,ry,rz]   (ndarray, 如果可用)
+#   - <camera_name>:      相机帧 (ndarray, 如果配置了相机)
+#   - gripper:            夹爪百分比 (如果配置了 StepMotorGripper)
+# =============================================================================
+device_to_r2c:
+  task: "pick the block and place it on the plate"
+  mappings:
+    # --- 关节名 (default 值, 硬件不支持读取时使用) ---
+    - target_key: "joint_states.names"
+      default:
+        - joint_1
+        - joint_2
+        - joint_3
+        - joint_4
+        - joint_5
+        - joint_6
+
+    # --- 关节位置 (6D) ---
+    # Jaka adapter 输出 joint_positions (ndarray) 和各关节独立键。
+    # 此处用 joint_positions 直接组装，避免 source_paths 逐键拼合。
+    - target_key: "joint_states.position"
+      source_path: "joint_positions"
+
+    # --- 夹爪 (按实际硬件配置启用) ---
+    - target_key: "joint_states.position"
+      target_index: 6
+      source_path: "gripper"
+      required: false
+
+    # --- TCP 位姿 (6D axis-angle, 可选) ---
+    # 仅 control_mode: "joint" 且 daemon 有缓存时提供
+    # - target_key: "tcp_pose"
+    #   source_path: "tcp_pose"
+    #   required: false
+
+    # --- 相机 (按实际硬件配置启用) ---
+    # 启用条件: hardware.config.cameras 已配置对应相机
+    # 相机帧在 observation 中的 key 等于 cameras 下的名称 (如 "wrist", "top")
+    - target_key: "images.color.wrist"
+      source_path: "wrist"
+      transforms:
+        - ndarray_to_jpeg
+      required: false
+
+    - target_key: "images.color.top"
+      source_path: "top"
+      transforms:
+        - ndarray_to_jpeg
+      required: false
+
+# =============================================================================
+# 下行映射: R2C Actions → Jaka 设备指令
+#
+# 推理服务 cloud_jaka_config.yaml 的 model_to_r2c 输出:
+#   joint_states.position: [j1, ..., j6, gripper_pct]  (7D: 6 关节 + 1 夹爪)
+#
+# JakaHardwareAdapter.send_action 可以消费以下 key:
+#   - joint_positions:  直接关节角列表
+#   - joint_target:     关节目标列表
+#   - joint_states:     {position: [j1..j6] 或 [[step1], [step2], ...]}
+#   - eef_pose:         末端轴角位姿 [x,y,z,rx,ry,rz]
+#   - gripper:          夹爪百分比 (0–100)
+#
+# _extract_joint_target 按优先级: joint_positions > joint_target > joint_states.position
+# _extract_gripper_target 按优先级: gripper_position > gripper_percent > gripper > gripper_state
+# =============================================================================
+r2c_to_device:
+  mappings:
+    # 推理输出 joint_states.position 前6维 → adapter 的 joint_target
+    - target: "joint_target"
+      source: "joint_states.position"
+      slice_start: 0
+      slice_end: 6
+      required: true
+
+    # 推理输出 joint_states.position 第7维 (index 6) → adapter 的 gripper
+    # Jaka 步进电机夹爪: _extract_gripper_target 从 command["gripper"] 取值
+    - target: "gripper"
+      source: "joint_states.position"
+      source_index: 6
+      required: false

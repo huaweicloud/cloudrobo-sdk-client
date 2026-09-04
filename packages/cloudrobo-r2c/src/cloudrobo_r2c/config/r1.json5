@@ -1,0 +1,53 @@
+{
+  // Zenoh 连接配置
+  mode: "peer",
+  listen: {
+    // ip需替换为本机ip 或是使用0.0.0.0  port一般使用7447
+    endpoints: ["tcp/ip:port"]
+  },
+    scouting: {
+      multicast: { enabled: false }
+    },
+
+
+  plugins: {
+    ros1: {
+      ros_master_uri: "http://localhost:11311",
+
+      // ── ROS1 → Zenoh (订阅 ROS1 数据，发布到 Zenoh) ──
+      // 默认禁用所有 Publisher，只开启需要的反馈 topics
+      publisher_bridging_mode: "disabled",
+      publisher_topic_custom_bridging_mode: {
+        // 相机图像
+        "/hdas/camera_wrist_left/color/image_raw/compressed": "auto",
+        "/hdas/camera_wrist_right/color/image_raw/compressed": "auto",
+        "/hdas/camera_head/rgb/image_rect_color/compressed": "auto",
+        // 左右臂状态
+        "/hdas/feedback_arm_left": "auto",
+        "/hdas/feedback_arm_right": "auto",
+        // 左右夹爪状态
+        "/hdas/feedback_gripper_left": "auto",
+        "/hdas/feedback_gripper_right": "auto"
+      },
+
+      // ── Zenoh → ROS1 (从 Zenoh 接收指令，发布到 ROS1) ──
+      // 默认禁用所有 Subscriber，只开启需要的控制 topics
+      subscriber_bridging_mode: "disabled",
+      subscriber_topic_custom_bridging_mode: {
+        // 左右臂控制
+        "/motion_control/control_arm_left": "auto",
+        "/motion_control/control_arm_right": "auto",
+        // 左右夹爪控制
+        "/motion_control/position_control_gripper_left": "auto",
+        "/motion_control/position_control_gripper_right": "auto"
+      },
+
+      // 禁用 Service/Client 桥接，保持干净
+      service_bridging_mode: "disabled",
+      client_bridging_mode: "disabled",
+
+      // 轮询间隔
+      ros_master_polling_interval: "100ms"
+    }
+  }
+}

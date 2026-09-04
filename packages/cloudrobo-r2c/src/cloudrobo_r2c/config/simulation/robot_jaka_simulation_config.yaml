@@ -1,0 +1,207 @@
+schema_version: "v2.1"
+
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 10.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+hardware:
+  type: "ros2"                  # 硬件适配器类型
+  config:                       # ROS2配置
+    node_name: "r2c_jaka_simulation"
+    spin_timeout_sec: 0.05
+    auto_spin: True
+    subscriptions:               # 订阅配置
+      joint_states:
+        topic: /joint_states
+        msg_type: sensor_msgs.msg.JointState
+        qos: 10
+        max_update_hz: 10
+        store_as: joint_states
+        include_fields: ["name", "position", "velocity", "effort"]
+        field_aliases:
+          name: names
+      front:                     # 外部相机订阅
+        topic: /camera_external/camera_image_color
+        msg_type: sensor_msgs.msg.Image
+        qos: 10
+        store_as: front
+        store_raw_message: true
+      wrist:                     # 手腕相机订阅
+        topic: /camera_wrist/camera_image_color
+        msg_type: sensor_msgs.msg.Image
+        qos: 10
+        store_as: wrist
+        store_raw_message: true
+    command_publishers:          # 发布配置
+      arm:
+        topic: "/arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        qos: 10
+      gripper:
+        topic: "/gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        qos: 10
+    action_targets:
+      arm: arm
+      gripper: gripper
+
+translator:
+  type: "configurable"
+
+device_to_r2c:                   # 设备数据 -> R2C格式映射
+  task: "move arm to target position"    # 任务描述
+  mappings:
+    # 关节名称（使用模型标准名称）
+    - target_key: "joint_states.names"
+      default: ["arm_1", "arm_2", "arm_3", "arm_4", "arm_5", "arm_6"]
+
+    # 关节位置数据
+    - target_key: "joint_states.position"
+      source: streams.joint_states.position
+      transforms: array_to_list
+
+    # 关节速度数据
+    - target_key: "joint_states.velocity"
+      default: []
+
+    # 关节扭矩数据
+    - target_key: "joint_states.torque"
+      default: []
+
+    # 相机图像 - 外部相机
+    - target_key: "images.color.front"
+      source_path: "streams.front"
+      transforms: ros_image_to_jpeg
+
+    # 相机图像 - 手腕相机
+    - target_key: "images.color.wrist"
+      source_path: "streams.wrist"
+      transforms: ros_image_to_jpeg
+
+    # 末端执行器状态名称
+    - target_key: "end_effector_states.names"
+      default: ["gripper"]
+
+    # 末端执行器位置（夹爪状态）- 从2个关节反推
+    # 根据原始配置，关节数据包含：
+    # 0-5: 6个手臂关节 (joint_1到joint_6)
+    # 6-7: 2个夹爪关节 (left_finger_joint, right_finger_joint)
+    - target_key: "end_effector_states.position"
+      source: streams.joint_states.position
+      transforms:
+        - name: jaka_extract_gripper_state
+          config:
+            left_finger_idx: 6  # left_finger_joint在joint_states中的索引
+      required: true
+
+    # 末端执行器力（空）
+    - target_key: "end_effector_states.force"
+      default: []
+
+    # 末端执行器位姿名称
+    - target_key: "end_effector_poses.names"
+      default: []
+
+    # 末端执行器位姿数据
+    - target_key: "end_effector_poses.pose"
+      default: []
+
+r2c_to_device:                   # R2C格式 -> 设备指令映射
+  mappings:
+    # 手臂关节控制
+    - target: "arm"
+      source: "joint_states.position"
+      slice_start: 0
+      slice_end: 6
+      use_assign_dotted: false
+      required: true
+
+    # 夹爪控制 - 将单一值转换为2个关节
+    - target: "gripper"
+      source: "end_effector_states.position"
+      source_index: 0
+      transforms:
+        - name: jaka_gripper_value_to_joints
+      use_assign_dotted: false
+      required: true
+
+r2c_to_model:                    # R2C格式 -> 模型输入映射
+  mappings:
+    # 外部相机图像
+    - source_path: "images.color.front"
+      target_key: "observation.images.front"
+      transforms:
+        - jpeg_to_ndarray
+        - rgb_to_bgr
+      required: true
+
+    # 手腕相机图像
+    - source_path: "images.color.wrist"
+      target_key: "observation.images.wrist"
+      transforms:
+        - jpeg_to_ndarray
+        - rgb_to_bgr
+      required: true
+
+    # 关节位置状态
+    - source_path: "joint_states.position"
+      target_key: "observation.state"
+      slice_start: 0
+      slice_end: 6
+      required: true
+
+model_to_r2c:                    # 模型输出 -> R2C格式映射
+  mappings:
+    # 关节位置控制
+    - source_tensor: "action"
+      target_key: "joint_states.position"
+      slice_start: 0
+      slice_end: 6
+
+    # 末端执行器状态控制
+    - source_tensor: "action"
+      target_key: "end_effector_states.position"
+      slice_start: 6
+      slice_end: 7
+
+# SDK连接配置
+sdk_config:
+  project_id: "test-tenant"
+  device_id: "jaka-robot-01"
+  client_id: "ros2-jaka-client-01"
+  endpoints: ["tcp/0.0.0.0:7447"]
+  mode: "peer"
+  protocol: "zenoh"

@@ -1,0 +1,142 @@
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 10.0
+  max_duration_s: 0.0
+  action_response_timeout_s: 5.0
+  # 队列中剩余 action 数低于此阈值时提前请求新 observation
+  publish_trigger_threshold: 0
+  # 融合策略：replace / weighted_average / nearest_neighbor / proportional
+  fusion_strategy: "weighted_average"
+  # 融合窗口大小（用于 weighted_average / proportional）
+  fusion_window_size: 10
+  dry_run: true
+  keyboard_control:
+    enabled: false
+    
+hardware:
+  type: "moz1"
+  config:
+    # Moz1 机器人配置（与 MozDriverConfig 字段对应）
+    structure: "wholebody"             # dualarm / wholebody_without_base / wholebody
+    robot_control_hz: 120
+    camera_mode: "on"                 # off / on / visualize  — ON 时三路相机启用
+    realsense_serials: "000000000, 000000000, 000000000"
+    camera_resolutions: "320*240, 320*240, 320*240"
+    enable_soft_realtime: false
+    # bind_cpu_idxs: [5]
+    # disabled_cameras: ["cam_high"]
+
+    # 调试模式：只打印 action 和 observation，不执行实际动作
+    # dry_run: true
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  task: "move dual arms to target position"
+  image_encoding: "jpeg"
+  mappings:
+    # --- 关节 names（14 维双臂关节：左臂 7 + 右臂 7） ---
+    - target_key: "joint_states.names"
+      default:
+        - "leftarm_joint_1"
+        - "leftarm_joint_2"
+        - "leftarm_joint_3"
+        - "leftarm_joint_4"
+        - "leftarm_joint_5"
+        - "leftarm_joint_6"
+        - "leftarm_joint_7"
+        - "rightarm_joint_1"
+        - "rightarm_joint_2"
+        - "rightarm_joint_3"
+        - "rightarm_joint_4"
+        - "rightarm_joint_5"
+        - "rightarm_joint_6"
+        - "rightarm_joint_7"
+
+    # --- 关节位置（14 维：左臂 7 + 右臂 7） ---
+    # 注：adapter 的 get_observation() 已将左右臂关节拼接为 14 维 list
+    - target_key: "joint_states.position"
+      source: "joint_positions"
+      transforms: array_to_list
+
+    # --- 关节速度（空，Moz1 SDK 不提供） ---
+    - target_key: "joint_states.velocity"
+      default: []
+
+    # --- 关节扭矩（空） ---
+    - target_key: "joint_states.torque"
+      default: []
+
+    # --- 三路相机图像 ---
+    # 高位相机（俯视）
+    - target_key: "images.color.cam_high"
+      source_path: "cam_high"
+      transforms: ndarray_to_jpeg
+      required: false
+
+    # 左手腕相机
+    - target_key: "images.color.cam_left_wrist"
+      source_path: "cam_left_wrist"
+      transforms: ndarray_to_jpeg
+      required: false
+
+    # 右手腕相机
+    - target_key: "images.color.cam_right_wrist"
+      source_path: "cam_right_wrist"
+      transforms: ndarray_to_jpeg
+      required: false
+
+    # --- 末端执行器 names（左右夹爪） ---
+    - target_key: "end_effector_states.names"
+      default: ["left_gripper", "right_gripper"]
+
+    # --- 夹爪位置（左、右各 1 维） ---
+    # 注：adapter 的 get_observation() 已将左右夹爪拼接为 2 维 list
+    - target_key: "end_effector_states.position"
+      source: "gripper_positions"
+      transforms: array_to_list
+      required: true
+
+    # --- 夹爪力（空） ---
+    - target_key: "end_effector_states.force"
+      default: []
+
+    # --- 末端执行器位姿（空） ---
+    - target_key: "end_effector_poses.names"
+      default: []
+    - target_key: "end_effector_poses.pose"
+      default: []
+
+r2c_to_device:
+  mappings:
+    # 左臂关节控制（7 维，取 joint_states.position[0:7]）
+    - target: "leftarm_cmd_joint_pos"
+      source: "joint_states.position"
+      slice_start: 0
+      slice_end: 7
+      use_assign_dotted: false
+      required: true
+
+    # 右臂关节控制（7 维，取 joint_states.position[7:14]）
+    - target: "rightarm_cmd_joint_pos"
+      source: "joint_states.position"
+      slice_start: 7
+      slice_end: 14
+      use_assign_dotted: false
+      required: true
+
+    # 左夹爪控制（取 end_effector_states.position[0]）
+    - target: "leftarm_gripper_cmd_pos"
+      source: "end_effector_states.position"
+      source_index: 0
+      use_assign_dotted: false
+      required: true
+
+    # 右夹爪控制（取 end_effector_states.position[1]）
+    - target: "rightarm_gripper_cmd_pos"
+      source: "end_effector_states.position"
+      source_index: 1
+      use_assign_dotted: false
+      required: true

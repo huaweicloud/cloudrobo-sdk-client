@@ -1,0 +1,12 @@
+-e packages/cloudrobo-core
+-e packages/cloudrobo-asset
+-e packages/cloudrobo-workspace
+-e packages/cloudrobo-resource
+-e packages/cloudrobo-dataset
+-e packages/cloudrobo-train
+-e packages/cloudrobo-eval
+-e packages/cloudrobo-infer
+-e packages/cloudrobo-robot
+-e packages/cloudrobo-dispatch
+-e packages/cloudrobo-r2c
+-e ./

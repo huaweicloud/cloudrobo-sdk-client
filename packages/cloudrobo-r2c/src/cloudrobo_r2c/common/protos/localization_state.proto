@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "LocalizationStateProto";
+option java_multiple_files = false;
+
+message LocalizationState {
+  // Timestamp of the state
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Source of the state message (e.g., "robot", "simulator", "edge_gateway")
+  string source = 2;
+
+  // Localization status (e.g., "LOCALIZED", "LOST", "INITIALIZING")
+  string status = 3;
+
+  // Reference frame ID (e.g., "map")
+  string frame_id = 4;
+
+  // Odometry pose with covariance
+  PoseWithCovariance odom_pose = 5;
+
+  // Map pose with covariance
+  PoseWithCovariance map_pose = 6;
+
+  // Localization confidence [0.0, 1.0]
+  double confidence = 7;
+}

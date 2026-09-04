@@ -1,0 +1,235 @@
+# =============================================================================
+# R2C Edge Configuration — Generic ROS1 Robot via Zenoh Bridge
+#
+# 描述: 通过 zenoh-bridge-ros1 协议驱动任意 ROS1 机器人的通用配置模板。
+#       订阅和发布的 topic 均可按需配置，encoder 按 publisher 显式指定。
+#
+# 前置条件:
+#   1. 安装 zenoh-python: pip install zenoh
+#   2. 机器人端运行 zenoh-bridge-ros1
+#   3. 网络可达 Zenoh peer 或 router
+#
+# 用法:
+#   python -m r2c_sdk.cloudroboclient \
+#     --client-config config/client_config.yaml \
+#     --robot-config config/robot_zenoh_ros1_config.yaml
+#
+# 提示: 以下示例 topic 基于 R1(HDAS) 机器人，更换机器人时修改
+#       subscriptions 和 publishers 中的 ros_topic 即可。
+# =============================================================================
+
+schema_version: "v2.1"
+
+# =============================================================================
+# 运行时配置
+# =============================================================================
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 20.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+hardware:
+  type: zenoh_ros1
+
+  config:
+    # ── Zenoh 连接 ──
+    mode: client                     # "peer" (P2P) 或 "client" (连接 router)
+    connect_endpoints:           # client 模式时指定 router 地址
+      - "tcp/192.168.6.3:7447"
+    namespace: ""                  # 留空则 zenoh key 不含 namespace 段 (与 bridge 默认行为一致)
+    rate: 30.0
+
+    # ── Zenoh scouting 配置 ──
+    scouting:
+      multicast:
+        enabled: false             # client 模式禁用组播发现
+
+    # ── 自定义 ROS1 消息类型 (按需添加) ──
+    # 内置支持: sensor_msgs/CompressedImage, sensor_msgs/JointState,
+    #           sensor_msgs/Image, std_msgs/Float32,
+    #           std_msgs/Float32MultiArray, hdas_msg/motor_control
+    # ros1_type_overrides:
+    #   "custom_msgs/MyMessage":
+    #     datatype: "custom_msgs/MyMessage"
+    #     md5: "abc123def456..."
+
+    # ── 订阅: ROS1 → Zenoh → Adapter ──
+    subscriptions:
+      # --- 相机 (CompressedImage) ---
+      camera_left_wrist:
+        ros_topic: "/hdas/camera_wrist_left/color/image_raw/compressed"
+        msg_type: "sensor_msgs/CompressedImage"
+        store_as: "wrist_left"
+      camera_right_wrist:
+        ros_topic: "/hdas/camera_wrist_right/color/image_raw/compressed"
+        msg_type: "sensor_msgs/CompressedImage"
+        store_as: "wrist_right"
+      camera_head:
+        ros_topic: "/hdas/camera_head/rgb/image_rect_color/compressed"
+        msg_type: "sensor_msgs/CompressedImage"
+        store_as: "front"
+
+      # --- 关节状态 (JointState) ---
+      arm_left:
+        ros_topic: "/hdas/feedback_arm_left"
+        msg_type: "sensor_msgs/JointState"
+        store_as: "arm_left"
+      arm_right:
+        ros_topic: "/hdas/feedback_arm_right"
+        msg_type: "sensor_msgs/JointState"
+        store_as: "arm_right"
+      gripper_left:
+        ros_topic: "/hdas/feedback_gripper_left"
+        msg_type: "sensor_msgs/JointState"
+        store_as: "gripper_left"
+      gripper_right:
+        ros_topic: "/hdas/feedback_gripper_right"
+        msg_type: "sensor_msgs/JointState"
+        store_as: "gripper_right"
+
+    # ── 发布: Adapter → Zenoh → ROS1 ──
+    #       encoder 字段指定序列化方式:
+    #         motor_control — hdas_msg/motor_control 编码
+    #         float32       — std_msgs/Float32 编码
+    #         raw_bytes     — 透传 bytes (非标准消息)
+    publishers:
+      arm_left:
+        ros_topic: "/motion_control/control_arm_left"
+        msg_type: "hdas_msg/motor_control"
+        encoder: "motor_control"
+        go_home_role: arm            # go_home 时收 joints (左臂 6 关节)
+      arm_right:
+        ros_topic: "/motion_control/control_arm_right"
+        msg_type: "hdas_msg/motor_control"
+        encoder: "motor_control"
+      gripper_left:
+        ros_topic: "/motion_control/position_control_gripper_left"
+        msg_type: "std_msgs/Float32"
+        encoder: "float32"
+        go_home_role: gripper        # go_home 时收 gripper (左夹爪 Float32 位置)
+      gripper_right:
+        ros_topic: "/motion_control/position_control_gripper_right"
+        msg_type: "std_msgs/Float32"
+        encoder: "float32"
+
+    # ── 控制参数 (按 publisher 名匹配) ──
+    #      motor_control encoder 会读取 v_des / t_ff / kp / kd / mode
+    #      float32 encoder 忽略此段
+    control_params:
+      arm_left:
+        v_des: [4.0, 4.0, 4.0, 6.0, 6.0, 6.0]
+        t_ff: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
+        kp: [0.0]
+        kd: [0.0]
+        mode: 0
+      arm_right:
+        v_des: [1.6, 1.6, 1.6, 4.0, 4.0, 4.0]
+        t_ff: [0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
+        kp: [0.0]
+        kd: [0.0]
+        mode: 0
+
+    # ── 适配器命令 (通过键盘 'h' 键或 execute_command("go_home") 触发) ──
+    # go_home 把 joints 发给 go_home_role: arm 的 publisher (arm_left)，
+    # 把 gripper 发给 go_home_role: gripper 的 publisher (gripper_left)。
+    # R1 当前推理路径只接左臂，故 go_home 范围 = 左臂 6 关节 + 左夹爪。
+    commands:
+      go_home:
+        joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # arm_left 6 关节 (rad)
+        gripper: 0.0                              # gripper_left Float32 位置
+
+# =============================================================================
+# 设备翻译器
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 上行映射: 设备原始数据 → R2C Observations
+#
+# 示例: 左臂 6 关节 + 左夹爪 → joint_states (7D)
+#       3 路相机 → images.color.*
+#
+# 更换机器人时调整 source_path / target_key 即可。
+# =============================================================================
+device_to_r2c:
+  task: "ros1 teleoperation"
+  mappings:
+    - target_key: "joint_states.names"
+      default:
+        - left_j1
+        - left_j2
+        - left_j3
+        - left_j4
+        - left_j5
+        - left_j6
+        - gripper_left
+
+    - target_key: "joint_states.position"
+      source_path: "arm_left.position"
+
+    - target_key: "joint_states.position"
+      source_path: "gripper_left.position"
+      source_index: 0
+      target_index: 6
+
+    - target_key: "images.color.wrist_left"
+      source_path: "wrist_left"
+
+    - target_key: "images.color.wrist_right"
+      source_path: "wrist_right"
+
+    - target_key: "images.color.front"
+      source_path: "front"
+
+# =============================================================================
+# 下行映射: R2C Actions → 设备指令
+#
+# 示例: 模型输出 joint_states.position (7D):
+#         [j1..j6, grip] → arm_left.position (6D) + gripper_left.position (1D)
+# =============================================================================
+r2c_to_device:
+  mappings:
+    - target: "arm_left.position"
+      source: "joint_states.position"
+      transforms:
+        - slice:
+            start: 0
+            end: 6
+
+    - target: "gripper_left.position"
+      source: "joint_states.position"
+      source_index: 6

@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "EndEffectorStateProto";
+option java_multiple_files = false;
+
+message EndEffectorState {
+  // Timestamp of the state
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Source of the state message (e.g., "robot", "simulator", "edge_gateway")
+  string source = 2;
+
+  // Name of the end effector (e.g., "hand_left")
+  string name = 3;
+
+  // Pose of the end effector [tx, ty, tz, qx, qy, qz, qw]
+  Pose7D pose = 4;
+
+  // State values (e.g., joint positions or gripper width)
+  repeated float state = 5;
+
+  // Velocity [vx, vy, vz, wx, wy, wz]
+  // 3 linear velocities + 3 angular velocities
+  repeated double velocity = 6;
+
+  // Acceleration [ax, ay, az, alphax, alphay, alphaz]
+  // 3 linear accelerations + 3 angular accelerations
+  repeated double acceleration = 7;
+
+  // Force/Torque sensor data
+  repeated float force = 8;
+
+  // Tactile sensor data
+  repeated float tactile = 9;
+
+  // Category of the end effector (e.g., CONTINUOUS, DISCRETE, etc.)
+  string category = 10;
+}

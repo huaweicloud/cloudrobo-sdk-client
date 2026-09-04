@@ -1,0 +1,64 @@
+# Q25 Ultra robot configuration for R2C SDK robot application.
+# R2C client settings stay in config/client_config.yaml.
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 1.0                 # 1Hz observation publishing
+  max_duration_s: 0.0
+  action_response_timeout_s: 5.0
+  # 队列中剩余 action 数低于此阈值时提前请求新 observation（0 退化为队列空才发布）
+  publish_trigger_threshold: 0
+  # 融合策略：replace / weighted_average / nearest_neighbor / proportional
+  fusion_strategy: "weighted_average"
+  # 融合窗口大小（用于 weighted_average / proportional）
+  fusion_window_size: 10
+  # 空格 = 一键暂停全流程（停动作+停观测+清空待执行action队列+可选回home），再按空格恢复
+  keyboard_control:
+    enabled: false
+    
+hardware:
+  type: "q25_ros2"
+  config:
+    # Camera topic on the Q25 robot
+    image_topic: "/camera/image_raw"
+    # Trajectory topic (std_msgs/String, JSON payload)
+    trajectory_topic: "/track/cloud_trajectory"
+    # Image preprocessing parameters
+    image_width: 224
+    image_height: 224
+    jpeg_quality: 90
+    # Use mock image (solid gray) instead of real camera. Useful for testing
+    # without ROS2 camera available.
+    use_mock_image: false
+    # Debug mode (log only, no actual ROS2 publishing)
+    dry_run: true
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  image_encoding: "jpeg"
+  mappings:
+    # Camera image -> images.color.image (fixed key name "image")
+    - target_key: "images.color.image"
+      source_path: "front"
+      transforms:
+        - jpeg_to_ndarray
+        - rgb_to_bgr
+        - ndarray_to_jpeg
+    # end_effector_states: [call_method, id, task_id, reset_status]
+    - target_key: "end_effector_states.names"
+      default: ["call_method", "id", "task_id"]
+    - target_key: "end_effector_states.position"
+      source_paths: ["call_method", "call_id", "task_id"]
+    # joint_states -> empty dict (no odom data sent)
+    - target_key: "joint_states"
+      default: {}
+    # end_effector_pose -> empty dict
+    - target_key: "end_effector_pose"
+      default: {}
+
+r2c_to_device:
+  # Empty mappings: translator passes through the full action dict.
+  # The adapter directly parses joint_states.position (32 floats = 8 waypoints x 4 dims).
+  mappings: []

@@ -1,0 +1,113 @@
+schema_version: v2.1
+runtime:
+  publish_hz: 10.0
+  max_duration_s: 0.0
+  dry_run: true
+  action_response_timeout_s: 3.0
+  max_enqueue_actions_per_chunk: -1
+  enable_action_chunk_alignment: false
+  log_level: INFO
+  
+hardware:
+  type: tsd
+  config:
+    ip: ${TSD_IP:-168.168.80.90}
+    default_speed: 30
+    reconnect_max_retries: 3
+    reconnect_delay_s: 1.0
+    auto_enable_servo: true
+    auto_set_mode: true
+    auto_mode_value: 100
+    auto_set_speed: true
+    dry_run: true
+    mock_mode: true  # Set to true to skip real robot connection and use mock observations for testing
+translator:
+  type: configurable
+device_to_r2c:
+  task: tsd_joint_control
+  image_encoding: raw
+  mappings:
+  - target_key: joint_states.names
+    default:
+    - joint_1
+    - joint_2
+    - joint_3
+    - joint_4
+    - joint_5
+    - joint_6
+    - tcp_x
+    - tcp_y
+    - tcp_z
+    - tcp_a
+    - tcp_b
+    - tcp_c
+    - tcp_user_x
+    - tcp_user_y
+    - tcp_user_z
+    - tcp_user_a
+    - tcp_user_b
+    - tcp_user_c
+    - link
+    - enable
+    - alarm
+    - mode
+    - run_state
+    - in_pos
+    - remote
+    - cmd_queue
+    - speed
+    - uf_no
+    - tf_no
+    - rgm_state
+  - target_key: joint_states.position
+    source_paths:
+    - joint_1
+    - joint_2
+    - joint_3
+    - joint_4
+    - joint_5
+    - joint_6
+    - tcp_x
+    - tcp_y
+    - tcp_z
+    - tcp_a
+    - tcp_b
+    - tcp_c
+    - tcp_user_x
+    - tcp_user_y
+    - tcp_user_z
+    - tcp_user_a
+    - tcp_user_b
+    - tcp_user_c
+    - link
+    - enable
+    - alarm
+    - mode
+    - run_state
+    - in_pos
+    - remote
+    - cmd_queue
+    - speed
+    - uf_no
+    - tf_no
+    - rgm_state
+r2c_to_device:
+  mappings:
+  - target: joint_1
+    source: joint_states.position
+    source_index: 0
+  - target: joint_2
+    source: joint_states.position
+    source_index: 1
+  - target: joint_3
+    source: joint_states.position
+    source_index: 2
+  - target: joint_4
+    source: joint_states.position
+    source_index: 3
+  - target: joint_5
+    source: joint_states.position
+    source_index: 4
+  - target: joint_6
+    source: joint_states.position
+    source_index: 5

@@ -1,0 +1,18 @@
+cloudrobo:
+  auth:
+    ak: ""
+    sk: ""
+  endpoints:
+    cloudrobo-asset-manager: "https://cloudrobo-gallery.{region}.myhuaweicloud.com"
+    cloudrobo-service: "https://cloudrobo.{region}.myhuaweicloud.com"
+    cloudrobo-obs: "https://obs.{region}.myhuaweicloud.com"
+  region: cn-southwest-2
+  proxy:
+    http: ""
+    https: ""
+    no_proxy: ""
+debug:
+  ca_bundle: ''
+  log_traffic: false
+  verify_ssl: false
+  verbose: false

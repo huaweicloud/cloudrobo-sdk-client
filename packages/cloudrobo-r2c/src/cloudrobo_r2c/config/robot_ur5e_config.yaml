@@ -1,0 +1,165 @@
+# =============================================================================
+# R2C Device Configuration — Universal Robots UR5e (RTDE)
+#
+# 描述: 通过 RTDE 协议驱动的 UR5e 机械臂 + DH 夹爪 + RealSense 相机配置。
+#       适用于直接通过 RTDE 接口控制 UR5e 的场景（无需 ROS2）。
+#
+# 前置条件:
+#   1. 安装 ur-rtde: pip install ur-rtde
+#   2. UR5e 控制器已启动，RTDE 端口可用（默认 30004）
+#   3. DH 夹爪通过 USB 转 RS485 连接
+#   4. RealSense 相机通过 USB 连接
+#
+# 用法:
+#   python -m r2c_sdk.cloudroboclient \
+#     --client-config config/client_config.yaml \
+#     --robot-config config/robot_ur5e_config.yaml
+# =============================================================================
+
+schema_version: "v2.1"
+
+# =============================================================================
+# 运行时配置
+# =============================================================================
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 30.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+hardware:
+  type: ur5e_rtde
+
+  config:
+    # 动作模式: "absolute" = 绝对关节角度, "delta" = 增量 (模型输出为偏移量时使用)
+    action_mode: "delta"
+
+    # --- UR5e 机械臂 ---
+    robot:
+      robot_ip: "192.168.5.152"
+      frequency: 500          # RTDE 控制循环频率 (Hz)
+      lookahead_time: 0.1     # servoL 前瞻时间 (s)
+      gain: 300               # servoL 增益
+      max_pos_speed: 0.25     # 最大位置速度 (m/s)
+      max_rot_speed: 0.6      # 最大旋转速度 (rad/s)
+      tcp_offset: 0.21        # TCP 偏移 (m), 工具法兰到末端
+      verbose: true
+      # init_joints: [0.2212, -1.716, -1.8068, -0.6952, 1.4623, 0.3539]
+
+    # --- DH 夹爪 (Modbus RTU) ---
+    gripper:
+      port: "/dev/ttyUSBDH_"
+      baudrate: 115200
+      max_width: 0.08         # 最大开度 (m)
+      max_speed: 0.07273      # 最大速度 (m/s)
+      max_force: 140.0        # 最大力 (N)
+
+    # --- RealSense 相机 ---
+    cameras:
+      - name: "wrist"
+        serial: "045322075954"      # D435I
+        width: 640
+        height: 480
+        fps: 30
+
+      - name: "third_person"
+        serial: "134222076113"      # D435
+        width: 640
+        height: 480
+        fps: 30
+
+# =============================================================================
+# 设备翻译器: 配置驱动映射
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 上行映射: 设备原始数据 → R2C Observations
+# =============================================================================
+device_to_r2c:
+  task: "ur5e teleoperation"
+  mappings:
+    # --- 状态维度名 (与数据采集特征对齐) ---
+    - target_key: "joint_states.names"
+      default:
+        - x
+        - y
+        - z
+        - rx
+        - ry
+        - rz
+        - gripper_position
+
+    # --- 末端位姿 (6 维笛卡尔, 与数据采集 observation.state 对齐) ---
+    - target_key: "joint_states.position"
+      source_path: "eef_pose"
+      transforms: array_to_list
+
+    - target_key: "joint_states.position"
+      source_path: "gripper_position"
+      target_index: 6
+
+    # --- 腕部相机 ---
+    - target_key: "images.color.wrist"
+      source_path: "wrist"
+      transforms: 
+        - ndarray_to_jpeg
+
+    # --- 第三人称相机 ---
+    - target_key: "images.color.third_person"
+      source_path: "third_person"
+      transforms: 
+        - ndarray_to_jpeg
+
+# =============================================================================
+# 下行映射: R2C Actions → UR5e 设备指令
+# =============================================================================
+r2c_to_device:
+  mappings:
+    # --- 模型输出 7D → eef_pose(6) + gripper(1)
+    #     模型输出 = [dx,dy,dz,drx,dry,drz,grip_cmd]
+    #     delta 模式下适配器叠加到当前 eef 后发 send_waypoint → servoL
+    - target: "eef_pose"
+      source: "joint_states.position"
+      transforms:
+        - slice:
+            start: 0
+            end: 6
+
+    # --- 夹爪位置 → 夹爪指令 (绝对位置) ---
+    - target: "gripper_position"
+      source: "joint_states.position"
+      source_index: 6

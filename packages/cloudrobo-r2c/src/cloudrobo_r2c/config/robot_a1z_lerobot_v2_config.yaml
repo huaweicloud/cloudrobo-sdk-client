@@ -1,0 +1,259 @@
+# Galaxea A1Z 从臂 (6-DoF + 夹爪) — LeRobot 适配器配置文件 v2
+# 由 config/robot_a1z_lerobot_config.yaml (v1) 升级而来。
+#
+# v2 相对 v1 的关键变更:
+#   1. 相机键名改为 cam_wrist / cam_external，与 ACT 训练数据集的
+#      observation.images.cam_wrist / observation.images.cam_external 完全一致
+#      (本地 lerobot-eval 直接可用)；R2C 上行通道名保持 images.color.wrist /
+#      images.color.front，与 config/cloud_a1z_act_config.yaml 对齐。
+#   2. 相机索引按实际接线: cam_wrist=4 (640x480), cam_external=12 (1280x720)。
+#   3. gripper_sign 改为 +1：SDK 原生 Gripper 约定 0=闭合→1=张开，
+#      插件配置默认 -1 是独立 MotorB 时代的遗留值，云端推理必须用 +1。
+#   4. 标定 id 改为 follower_a1z (当前实际标定文件)。
+#   5. go_home 关节值更新为 follower_a1z.json 的最新 home_rad。
+#
+# 使用方式: uv run python -m r2c_sdk.cloudroboclient \
+#             --robot-config config/robot_a1z_lerobot_v2_config.yaml
+#
+# 前提:
+#   1. conda 环境 lerobot061 已安装 lerobot + a1z SDK，且已通过
+#      bash setup.sh 以 pip install -e 安装插件 lerobot_robot_galaxea_a1z
+#      (register_subclass 注册 robot.type，无需复制进 lerobot 源码树)。
+#   2. 已启用 CAN 口 (gs_usb USB-CANFD 适配器): sudo bash setup_follower_can.sh；
+#      可用 `ip -d link show can0` 检查。
+#   3. 标定 JSON: ~/.cache/huggingface/lerobot/calibration/robots/
+#      galaxea_a1z_follower/follower_a1z.json
+#      (home_rad / range_min_rad / range_max_rad / grip_min_norm / grip_max_norm)。
+#      云端无人值守运行需提前标定好并保持 calibrate: false。
+
+schema_version: "v2.1"
+
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 15.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)
+  action_response_timeout_s: 5.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 队列中剩余 action 数低于此阈值时提前请求新 observation。0 退化为队列空才发布
+  publish_trigger_threshold: 0
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    # 轨迹融合子配置
+    fusion:
+      strategy: weighted_average
+      # 融合窗口大小 (用于 weighted_average / nearest_neighbor)
+      window_size: 10
+      # 类型感知融合：声明 joint_states.position 每个元素的物理语义，
+      # 与 joint_states.position 的 7 个元素一一对应 (6 轴 + 夹爪)
+      state_types:
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+  # ── end async_request ─────────────────────────────────────────────
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+
+# ── 硬件适配器配置 ───────────────────────────────────────────────────
+hardware:
+  type: "lerobot"
+  config:
+    # robot.connect() 调用参数。A1Z 默认 calibrate=true 会触发交互式标定
+    # (input() 提示)，云端无人值守场景必须显式传 false（需已提前标定好）
+    runtime:
+      robot_connect:
+        calibrate: false
+
+    robot:
+      # lerobot 插件注册名 (RobotConfig.register_subclass("galaxea_a1z_follower"))
+      type: galaxea_a1z_follower
+      # 标定文件名 = calibration_dir/{id}.json
+      id: follower_a1z
+      # null = 默认 HF 缓存目录 (~/.cache/huggingface/lerobot/...)。
+      # 建议指定本地目录如 "calibration/"，方便备份标定 JSON
+      calibration_dir: null
+
+      # SocketCAN 接口 — gs_usb USB-CANFD 适配器在本机枚举为 can0，按实际修改
+      can_channel: can0
+      # 重力补偿比例 (0=关, 1=全补偿)
+      gravity_comp_factor: 1.0
+      # 控制回路频率 (Hz)。150 (而非 250) 可降低 gs_usb 每周期 CAN 负载，
+      # 减少反馈超时误触发 e-stop
+      control_freq_hz: 150
+
+      # ── 遥操作映射 ───────────────────────────────────────────────
+      # "rad": 云端动作值即绝对弧度 (rad)，钳到硬件限位 — 云端推理用这个
+      # "leader_deg": 主臂相对零位角度 (deg)，按标定零位/范围映射 — 主臂遥操作用
+      teleop_input: rad
+      # 各关节方向 (+1 / -1)。仅 leader_deg 模式生效；rad 模式不使用
+      # (遥操作时方向变换由主臂侧 --teleop.joint_sign='[-1,1,1,1,-1,-1]' 完成)
+      joint_sign: [1, 1, 1, 1, 1, 1]
+      # 主臂→从臂角度增益 (仅 leader_deg 模式生效)
+      scale: 1.0
+
+      # ── 安全限位 (默认值，可按需调整) ─────────────────────────────
+      # 每次调用 setpoint 变化硬上限 (rad)，速度限位的兜底
+      max_step_rad: 0.06
+      # 最大关节速度 (deg/s)
+      max_joint_vel_deg_s: 50.0
+      # 相对零位 ±N° 软限位；null = 仅标定范围
+      max_joint_travel_deg: null
+      # 退出时平滑回零位 (需已标定，rad 模式未标定时自动跳过)
+      return_to_zero_on_exit: true
+      return_speed_deg_s: 25.0
+
+      # ── 夹爪 (SDK 原生 Gripper，与手臂同一 CAN 总线) ──────────────
+      enable_gripper: true
+      # 方向: +1 = 不翻转。SDK 原生约定 0=闭合 → 1=张开 (check_gripper.py
+      # 注释同此)；插件配置默认 -1 是独立 MotorB 驱动时代的遗留值，此处必须 +1，
+      # 否则云端推理的开合方向与训练数据相反。
+      gripper_sign: 1
+      # ── 以下为独立 MotorB 夹爪驱动的遗留参数，SDK 原生夹爪激活时不生效，
+      #    仅为兼容 GalaxeaA1ZFollowerConfig 字段保留 ──
+      gripper_can_id: 7
+      gripper_kp: 15.0
+      gripper_kd: 0.4
+      gripper_max_step_rad: 0.4
+      gripper_margin: 0.10
+
+      # 相机 — width/height/fps 必填 (lerobot RobotConfig 校验)。
+      # 键名必须与 ACT 训练数据集的 observation.images.* 一致:
+      #   cam_wrist=4 (640x480, 腕部), cam_external=12 (1280x720, 头部/全局)。
+      # 注意: 1280x720 对 ACT 训练显存压力大 (token 数 ~880/帧)；若以后重采
+      # 低分辨率数据集 (如两路均 640x480)，此处需同步修改。
+      # 也可用 Orbbec 腕部相机 (需先安装 orbbec 插件):
+      #   type: orbbec, serial_number_or_name: "...", use_depth: true
+      cameras:
+        # 腕部相机
+        cam_wrist:
+          type: opencv
+          index_or_path: 4
+          width: 640
+          height: 480
+          fps: 30
+        # 头部/全局相机
+        cam_external:
+          type: opencv
+          index_or_path: 13
+          width: 960
+          height: 540
+          fps: 30
+
+    # ── 命令配置 ─────────────────────────────────────────────────
+    # 通用 lerobot 适配器只注册了 go_home (不支持 estop 类命令)
+    commands:
+      go_home:
+        type: go_home
+        joint_names:
+          - joint_1
+          - joint_2
+          - joint_3
+          - joint_4
+          - joint_5
+          - joint_6
+        # 6 个【绝对关节角】(rad)。取自 follower_a1z.json 的最新 home_rad
+        # (2026-08-13 标定)；rad 模式下直接作为目标并钳到硬件限位。
+        joints: [0.07534142061493831, 0.055886167696650446, -0.004386968795300206, -0.14362554360265456, -0.0001907377737087046, 0.0036240177004653873]
+        gripper: open
+
+# ── 翻译器配置 ───────────────────────────────────────────────────────
+translator:
+  type: "configurable"
+
+# ── 设备→R2C 观测映射 ────────────────────────────────────────────────
+# A1Z get_observation() 键: joint_1 ... joint_6 (rad),
+# gripper (夹爪反馈, 归一化 0=闭合→1=张开), 相机名 (RGB ndarray)
+device_to_r2c:
+  task: A1Z arm teleoperation
+  # 图像传输编码 (与 robot_a1z_config.yaml 保持一致)
+  image_encoding: jpeg
+  mappings:
+    # 关节 names — 6 轴 + 夹爪
+    - target_key: "joint_states.names"
+      default: ["arm_joint1", "arm_joint2", "arm_joint3", "arm_joint4", "arm_joint5", "arm_joint6", "gripper"]
+
+    # 关节位置 — [j1..j6 (rad), gripper 归一化 (0~1)]
+    - target_key: "joint_states.position"
+      source_paths: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper"]
+      use_lookup_dotted: false
+
+    # 相机键名已改为 cam_external / cam_wrist (与训练数据集特征一致)。
+    # R2C 上行通道名保持 images.color.front / images.color.wrist，
+    # 与 config/cloud_a1z_act_config.yaml 的 source_path 对齐。
+    - target_key: "images.color.front"
+      source_path: "cam_external"
+      transforms:
+        # lerobot opencv 相机输出 RGB，jpeg 编码前先转 BGR (cv2.imencode 要求 BGR)
+        # - rgb_to_bgr
+        - ndarray_to_jpeg
+
+    - target_key: "images.color.wrist"
+      source_path: "cam_wrist"
+      transforms:
+        # - rgb_to_bgr
+        - ndarray_to_jpeg
+
+# ── R2C→设备 动作映射 ────────────────────────────────────────────────
+# send_action() 键: joint_1 ... joint_6 (绝对 rad),
+# gripper (归一化 [0,1]，gripper_sign=+1 时原样下发，不翻转开合方向)。
+# 与 robot_a1z_config.yaml 的 joint_0..joint_5/gripper 目标一一对应
+# (joint_N = raw 适配器的 joint_{N-1})，源格式同为 7 元素 joint_states.position。
+r2c_to_device:
+  mappings:
+    # 将云端 joint_states.position 映射为 A1Z 的逐关节目标
+    # 格式: joint_states.position = [j1..j6 (rad), gripper (0~1)]
+    - target: "joint_1"
+      source: "joint_states.position"
+      source_index: 0
+      use_assign_dotted: false
+      required: true
+    - target: "joint_2"
+      source: "joint_states.position"
+      source_index: 1
+      use_assign_dotted: false
+      required: true
+    - target: "joint_3"
+      source: "joint_states.position"
+      source_index: 2
+      use_assign_dotted: false
+      required: true
+    - target: "joint_4"
+      source: "joint_states.position"
+      source_index: 3
+      use_assign_dotted: false
+      required: true
+    - target: "joint_5"
+      source: "joint_states.position"
+      source_index: 4
+      use_assign_dotted: false
+      required: true
+    - target: "joint_6"
+      source: "joint_states.position"
+      source_index: 5
+      use_assign_dotted: false
+      required: true
+    # 云端只发 6 个关节时夹爪保持当前位置
+    - target: "gripper"
+      source: "joint_states.position"
+      source_index: 6
+      use_assign_dotted: false
+      required: false

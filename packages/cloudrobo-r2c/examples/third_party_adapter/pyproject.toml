@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-robot-r2c-adapter"
+version = "0.1.0"
+description = "Third-party R2C adapter for MyRobot"
+requires-python = ">=3.10"
+dependencies = [
+    "hw-r2c-sdk",
+]
+
+# ═════════════════════════════════════════════════════════════════════
+# Register this adapter so RobotFactory discovers it automatically.
+# The entry_point name ("my_robot") becomes the hardware.type value
+# users put in their robot config YAML:
+#
+#     hardware:
+#       type: my_robot
+#       config:
+#         ip: "192.168.1.x"
+#         port: 502
+# ═════════════════════════════════════════════════════════════════════
+[tool.setuptools]
+py-modules = ["my_robot_adapter", "my_robot_commands"]
+
+[project.entry-points."r2c_sdk.adapters"]
+my_robot = "my_robot_adapter:create_my_robot_adapter"

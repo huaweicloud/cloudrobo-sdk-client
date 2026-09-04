@@ -1,0 +1,122 @@
+# =============================================================================
+# R2C Edge Configuration — Playback (回放录制数据)
+#
+# 描述: 使用 PlaybackRobotAdapter 回放之前通过 --record 录制的观测数据。
+#       适用于离线调试 cloudroboclient ↔ policy server 链路，无需真实硬件。
+#
+# 用法:
+#   1. 先录制:
+#      python -m r2c_sdk.cloudroboclient \
+#        --robot-config config/robot_ur5e_config.yaml \
+#        --record recordings/ur5e_demo.r2cr
+#
+#   2. 再回放:
+#      python -m r2c_sdk.cloudroboclient \
+#        --robot-config config/robot_playback_config.yaml
+#
+# 联调 (配合 policy server):
+#   终端 1: python -m r2c_sdk.inference.r2c_lerobot_policy_server \
+#             --client-config config/client_config.yaml \
+#             --cloud-config config/cloud_ur5e_act.yaml \
+#             --policy-type act --device cpu
+#   终端 2: python -m r2c_sdk.cloudroboclient \
+#             --client-config config/client_config.yaml \
+#             --robot-config config/robot_playback_config.yaml
+# =============================================================================
+
+schema_version: "v2.1"
+robot_id: "playback_001"
+task_name: "ur5e_playback"
+
+# =============================================================================
+# 运行时配置
+# =============================================================================
+runtime:
+  publish_hz: 30.0
+  max_duration_s: 0.0
+
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。
+  # 适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景。
+  dry_run: false
+
+  action_response_timeout_s: 5.0
+  max_enqueue_actions_per_chunk: -1
+  enable_action_chunk_alignment: true
+  # 队列中剩余 action 数低于此阈值时提前请求新 observation（0 退化为队列空才发布）
+  publish_trigger_threshold: 0
+  # 融合策略：replace / weighted_average / nearest_neighbor / proportional
+  fusion_strategy: "weighted_average"
+  # 融合窗口大小（用于 weighted_average / proportional）
+  fusion_window_size: 10
+  # 空格 = 一键暂停全流程（停动作+停观测+清空待执行action队列+可选回home），再按空格恢复
+  keyboard_control:
+    enabled: false
+
+
+# =============================================================================
+# 硬件适配器: Playback (回放录制数据)
+# =============================================================================
+hardware:
+  type: playback
+  playback_config:
+    recording_file: "recordings/r1_0528_2.r2cr"
+    loop: true            # 播完后循环回开头
+
+# =============================================================================
+# 设备翻译器: 与被录制的真实机器人使用相同的映射配置
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 上行映射: 设备数据 → R2C Observations
+#
+# 与被录制的 robot_ur5e_config.yaml 的 device_to_r2c 保持一致。
+# =============================================================================
+device_to_r2c:
+  task: "ur5e playback"
+  image_encoding: jpeg
+
+  mappings:
+    # 关节名
+    - target_key: "joint_states.names"
+      default:
+        - left_j1
+        - left_j2
+        - left_j3
+        - left_j4
+        - left_j5
+        - left_j6
+        - gripper_left
+
+    - target_key: "joint_states.position"
+      source_path: "arm_left.position"
+
+    - target_key: "joint_states.position"
+      source_path: "gripper_left.position"
+      source_index: 0
+      target_index: 6
+
+    - target_key: "images.color.wrist_left"
+      source_path: "left_wrist"
+
+    - target_key: "images.color.wrist_right"
+      source_path: "right_wrist"
+
+    - target_key: "images.color.front"
+      source_path: "head"
+# =============================================================================
+# 下行映射: R2C Actions → 设备指令 (回放时不执行)
+# =============================================================================
+r2c_to_device:
+  mappings:
+    - target: "arm_left.position"
+      source: "joint_states.position"
+      transforms:
+        - slice:
+            start: 0
+            end: 6
+
+    - target: "gripper_left.position"
+      source: "joint_states.position"
+      source_index: 6

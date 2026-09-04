@@ -1,0 +1,37 @@
+# Robot to Cloud SDK Client Configuration
+
+# 租户与设备标识
+project_id: "project-demo"
+device_id: "so101"
+client_id: "python-client-001"
+
+# Zenoh 连接配置
+endpoints: ["tcp/127.0.0.1:7447"]  # 推荐配置 Router 地址
+
+# 运行模式
+# peer:   支持局域网 P2P 直连优化（推荐）
+# client: 仅通过 Router 转发，适合严格防火墙限制或极低资源设备
+mode: "client"
+
+# 协议选择 (目前仅支持 zenoh)
+protocol: "zenoh"
+
+# 发布器QoS配置 (可选, 需要 zenoh-python 1.7+)
+publisher_reliability: "RELIABLE"         # 可选: RELIABLE / BEST_EFFORT
+publisher_congestion_control: "DROP"      # 可选: BLOCK / DROP
+publisher_reliability_by_message:
+  observations: "RELIABLE"
+  actions: "RELIABLE"
+  joint_states: "BEST_EFFORT"
+  end_effector_states: "BEST_EFFORT"
+  localization_states: "BEST_EFFORT"
+  imu_states: "BEST_EFFORT"
+  heartbeats: "BEST_EFFORT"
+publisher_congestion_control_by_message:
+  observations: "DROP"
+  actions: "DROP"
+
+# 认证配置 (可选)
+# authentication:
+#   method: "user_password"
+#   credential_path: "/path/to/secret"

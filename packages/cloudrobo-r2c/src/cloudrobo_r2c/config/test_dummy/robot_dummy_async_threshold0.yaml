@@ -1,0 +1,115 @@
+schema_version: v2.1
+runtime:
+  publish_hz: 10.0
+  max_duration_s: 0.0
+  dry_run: false
+  action_response_timeout_s: 30.0
+  # action_response_timeout_initial_s — 首次超时时间 (秒), 默认 3.0。超时后每次递增
+  action_response_timeout_initial_s: 3.0
+  # action_response_timeout_backoff — 超时倍增因子, 默认 2.0。即每次超时时长翻倍
+  action_response_timeout_backoff: 2.0
+  max_enqueue_actions_per_chunk: -1
+  enable_action_chunk_alignment: false
+  skip_initial_observations: 1
+  async_request:
+    enabled: true
+    publish_trigger_threshold: 0
+    fusion:
+      strategy: replace
+      window_size: 10
+  keyboard_control:
+    enabled: true
+hardware:
+  type: dummy
+  config:
+    joint_names:
+    - shoulder_pan.pos
+    - shoulder_lift.pos
+    - elbow_flex.pos
+    - wrist_flex.pos
+    - wrist_roll.pos
+    - gripper.pos
+    initial_joint_positions:
+    - 0.0
+    - 0.1
+    - -0.2
+    - 0.0
+    - 0.0
+    - 0.5
+    max_joint_speed_rad_s: 1.5
+    image_specs:
+      front:
+        h: 480
+        w: 640
+        c: 3
+      wrist:
+        h: 480
+        w: 640
+        c: 3
+
+    commands:
+      go_home:
+        type: go_home
+        joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      state:
+        type: get_state
+translator:
+  type: configurable
+device_to_r2c:
+  task: pick the pen into the box
+  mappings:
+  - target_key: joint_states.names
+    default:
+    - joint_1
+    - joint_2
+    - joint_3
+    - joint_4
+    - joint_5
+    - joint_6
+  - target_key: joint_states.position
+    source_paths:
+    - shoulder_pan.pos
+    - shoulder_lift.pos
+    - elbow_flex.pos
+    - wrist_flex.pos
+    - wrist_roll.pos
+    - gripper.pos
+    use_lookup_dotted: false
+  - target_key: images.color.front
+    source_path: front
+    transforms: ndarray_to_jpeg
+  - target_key: images.color.wrist
+    source_path: wrist
+    transforms: ndarray_to_jpeg
+r2c_to_device:
+  mappings:
+  - target: shoulder_pan.pos
+    source: joint_states.position
+    source_index: 0
+    use_assign_dotted: false
+    required: true
+  - target: shoulder_lift.pos
+    source: joint_states.position
+    source_index: 1
+    use_assign_dotted: false
+    required: true
+  - target: elbow_flex.pos
+    source: joint_states.position
+    source_index: 2
+    use_assign_dotted: false
+    required: true
+  - target: wrist_flex.pos
+    source: joint_states.position
+    source_index: 3
+    use_assign_dotted: false
+    required: true
+  - target: wrist_roll.pos
+    source: joint_states.position
+    source_index: 4
+    use_assign_dotted: false
+    required: true
+  - target: gripper.pos
+    source: joint_states.position
+    source_index: 5
+    use_assign_dotted: false
+    required: true

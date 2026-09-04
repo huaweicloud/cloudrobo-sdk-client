@@ -1,0 +1,67 @@
+# =============================================================================
+# Shared cloud config for:
+# - src/r2c_sdk/inference/r2c_cloud_adapter.py (OpenPI 在线推理)
+# - src/r2c_sdk/inference/r2c_policy_server.py (本地模型推理)
+# =============================================================================
+
+schema_version: "v2.2"
+service_name: "r2c_policy_runtime"
+
+# 运行模式：
+# - openpi: r2c_cloud_adapter 使用 WebSocket 调用 OpenPI 服务
+# - local:  r2c_policy_server 使用本地 TorchScript 模型
+runtime:
+  backend: "local"
+
+# OpenPI 服务信息（仅 cloud_adapter 使用）
+openpi:
+  host: "ws://127.0.0.1"
+  port: 8000
+  api_key: ""
+
+# 本地模型信息（policy_server 必需；cloud_adapter 可忽略）
+model:
+  type: "lerobot_act"
+  # lerobot policy type, supports: act/diffusion/pi0/...
+  # if `type` is `lerobot_act`, server will resolve it to policy_type `act`
+  policy_type: "act"
+  # 推荐：与 LeRobot 的 pretrained path 语义对齐
+  pretrained_model:
+    path: "/path_to_model"
+  device: "cuda:0"
+  fp16_inference: true
+  # whether to load and apply lerobot preprocessors and postprocessors
+  use_pre_post_processors: true
+  action_chunk_size: 50
+
+# 上行：Observations -> 模型输入
+r2c_to_model:
+  mappings:
+    - source_path: "images.color.front"
+      target_key: "observation.images.front"
+      transforms: ["jpeg_to_ndarray"]
+      required: false
+
+    - source_path: "images.color.wrist"
+      target_key: "observation.images.wrist"
+      transforms: ["jpeg_to_ndarray"]
+      required: false
+
+    - source_path: "joint_states.position"
+      target_key: "observation.state"
+      required: true
+
+    - source_path: "timestamp"
+      target_key: "meta.timestamp"
+
+    - source_path: "task"
+      target_key: "task"
+
+# 下行：模型输出 -> Actions
+model_to_r2c:
+  mappings:
+    - source_tensor: "action"
+      target_key: "joint_states.position"
+      slice_start: 0
+      slice_end: 6
+      dtype: "float32"

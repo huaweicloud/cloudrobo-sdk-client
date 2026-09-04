@@ -1,0 +1,33 @@
+# ---- IDE ----
+.idea/
+.vscode/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ---- Virtual environments ----
+.venv/
+.venv*/
+venv/
+env/
+
+# ---- Build output ----
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- Generated protobuf (built from .proto at build time) ----
+packages/cloudrobo-r2c/src/cloudrobo_r2c/common/models/generated/
+
+# ---- Tooling caches ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# ---- OS ----
+.DS_Store
+Thumbs.db

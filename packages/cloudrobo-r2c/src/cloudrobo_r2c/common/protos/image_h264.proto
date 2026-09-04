@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "ImageH264Proto";
+option java_multiple_files = false;
+
+/**
+ * H264 Encoded Image Data
+ */
+message H264ImageData {
+  // H264 encoded binary stream (merged single stream)
+  bytes h264_data = 1;
+
+  // Metadata about the H264 encoded images
+  H264ImageMetadata metadata = 2;
+}
+
+message H264ImageMetadata {
+  // Original image keys (e.g., "front", "wrist_left", "wrist_right")
+  repeated string image_keys = 1;
+
+  // Original shapes for each image [height, width, channels]
+  repeated ImageShape original_shapes = 2;
+
+  // Combined shape after merging [height, width, channels]
+  ImageShape combined_shape = 3;
+
+  // Merge direction: "horizontal" or "vertical"
+  string merge_direction = 4;
+
+  // Number of frames in the combined stream
+  int32 frame_count = 5;
+
+  // Quality preset (e.g., "very_high", "high", "medium", "low")
+  string quality_preset = 6;
+
+  // Speed preset (e.g., "slower", "slow", "medium", "fast", "faster")
+  string speed_preset = 7;
+
+  // Constant Rate Factor (CRF) value used for encoding
+  int32 crf_used = 8;
+}
+
+message ImageShape {
+  // Height dimension
+  int32 height = 1;
+
+  // Width dimension
+  int32 width = 2;
+
+  // Number of channels (e.g., 3 for RGB, 1 for grayscale)
+  int32 channels = 3;
+}
+

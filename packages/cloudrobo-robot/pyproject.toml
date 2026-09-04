@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools==83.0.0", "packaging==26.2", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hw-cloudrobo-robot"
+version = "0.1.0"
+description = "CloudRobo Robot Management SDK and CLI"
+requires-python = ">=3.8"
+authors = [{name = "Huawei Cloud CloudRobo Team", email = "hwcloudrobo@huawei.com"}]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "click>=8.0",
+    "hw-cloudrobo-core>=0.1.0",
+    "hw-cloudrobo-workspace>=0.1.0",
+]
+
+[project.entry-points."cloudrobo.groups"]
+robot = "cloudrobo_robot.cli:robot"
+
+[tool.setuptools.packages.find]
+where = ["src"]

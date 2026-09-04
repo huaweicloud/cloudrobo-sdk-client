@@ -1,0 +1,6 @@
+include src/cloudrobo_r2c/common/protos/*
+include src/cloudrobo_r2c/common/models/generated/*
+recursive-include examples *
+# Config directory lives inside the package; package-data in pyproject.toml
+# ships it in both sdist and wheel. Listed here for sdist completeness.
+recursive-include src/cloudrobo_r2c/config *.yaml *.json *.json5

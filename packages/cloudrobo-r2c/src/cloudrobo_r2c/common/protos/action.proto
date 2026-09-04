@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "common.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "ActionProto";
+option java_multiple_files = false;
+
+/**
+ * Robot Actions
+ * Topic: {project_id}/{device_id}/inference/actions
+ */
+message Actions {
+  // Timestamp of the inference
+  int64 timestamp = 1;
+
+  // Message ID
+  int64 id = 2;
+
+  // Number of steps in the action chunk (e.g., 100)
+  int32 chunk_size = 3;
+
+  // Action trajectories for joints
+  JointAction joint_states = 4;
+
+  // Action trajectories for end effectors (Map key: "left_hand", "right_hand")
+  map<string, EndEffectorPoseChunk> end_effector_poses = 5;
+
+  // Action trajectories for end effector states (e.g. grippers)
+  EndEffectorStateAction end_effector_states = 6;
+
+  // Base movement trajectories
+  LocalizationAction localization = 7;
+
+  // User-defined extension fields (self-describing)
+  map<string, ExtensionValue> extensions = 8;
+}
+
+/**
+ * Trajectory for joint states.
+ * positions/velocities/torques are flattened 2D arrays or list of lists.
+ * Since Protobuf doesn't support 2D arrays directly, we use repeated messages.
+ */
+message JointAction {
+  // Joint names (1D array, length = N_joints)
+  repeated string names = 1;
+
+  // Trajectory: [chunk_size][N_joints]
+  // List of joint states for each time step in the chunk
+  repeated JointStateStep position = 2;
+  repeated JointStateStep velocity = 3;
+  repeated JointStateStep torque = 4;
+}
+
+// Helper message representing one time step of joint values
+message JointStateStep {
+  repeated double data = 1;
+}
+
+/**
+ * Trajectory for End Effector Poses (per hand/effector)
+ */
+message EndEffectorPoseChunk {
+  // Trajectory: [chunk_size][7] (7 = pose dimension)
+  repeated Pose7D pose = 1;
+}
+
+/**
+ * Trajectory for End Effector States (grippers).
+ * Structure is similar to JointAction but for grippers.
+ */
+message EndEffectorStateAction {
+  // Gripper joint names (length = N_gripper_joints)
+  repeated string names = 1;
+
+  // Trajectory: [chunk_size][N_gripper_joints]
+  repeated JointStateStep position = 2;
+  repeated JointStateStep velocity = 3;
+  repeated JointStateStep torque = 4;
+}
+
+/**
+ * Trajectory for base localization/movement.
+ */
+message LocalizationAction {
+  // Trajectory: [chunk_size][7]
+  repeated Pose7D odom_pose = 1;
+  repeated Pose7D map_pose = 2;
+}

@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "JointStateProto";
+option java_multiple_files = false;
+
+message JointStateMessage {
+  // Timestamp of the joint states
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Source of the state message (e.g., "robot", "simulator", "edge_gateway")
+  string source = 2;
+
+  // Observed state of the joints
+  JointObservation observation = 3;
+
+  // Instruction/Command sent to the joints
+  JointInstruction instruction = 4;
+}
+
+message JointObservation {
+  // Joint names
+  repeated string names = 1;
+
+  // Joint status (e.g., "Normal", "Error")
+  repeated string status = 2;
+
+  // Current position (rad or meter)
+  repeated double position = 3;
+
+  // Current velocity (rad/s or m/s)
+  repeated double velocity = 4;
+
+  // Current acceleration (rad/s^2 or m/s^2)
+  repeated double acceleration = 5;
+
+  // Joint temperature (Celsius)
+  repeated double temperature = 6;
+
+  // Effort/Torque applied
+  repeated double effort = 7;
+
+  // Motor current (Amperes)
+  repeated double motor_current = 8;
+}
+
+message JointInstruction {
+  // Target position
+  repeated double target_position = 1;
+
+  // Target velocity
+  repeated double target_velocity = 2;
+
+  // Target effort (torque/force)
+  repeated double target_effort = 3;
+}

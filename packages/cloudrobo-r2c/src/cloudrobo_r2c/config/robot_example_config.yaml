@@ -1,0 +1,154 @@
+# =============================================================================
+# R2C Edge 配置模板
+#
+# 这是一个可直接运行的示例配置文件，使用 DummyRobotHardwareAdapter（无需真实硬件）。
+# 阅读此文件可了解 R2C 边缘端配置的完整结构和各字段含义。
+#
+# 用法:
+#   python -m r2c_sdk.cloudroboclient --robot-config config/robot_example_config.yaml
+# =============================================================================
+
+schema_version: "v2.1"
+
+# =============================================================================
+# 1. 运行时配置 (Runtime)
+# =============================================================================
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 10.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: false
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+  # 心跳自动上报配置：在 R2CSession 连接成功后按周期发送心跳
+  heartbeat:
+    enabled: true
+    interval_ms: 5000
+    jitter_ms: 500
+    mode: "AUTO"
+    status: "ONLINE"
+    mode: "AUTO"
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    # 启用后，终端聚焦时按键触发命令 (空格=暂停, h=go_home, e=优雅退出)
+    enabled: true
+    # 自定义按键映射 (可选)。key 为按键字符，value 为 commands 中定义的实例名。
+    # 映射到 "" 可禁用默认按键。保留命令 pause_resume / graceful_stop 不可禁用。
+    # keymap:
+    #   "r": my_home     # r 键 → 执行 my_home 命令
+    #   "h": ""          # 禁用默认的 h → go_home (非保留命令允许禁用)
+
+hardware:
+  type: "dummy"
+  config:
+    # 关节名称列表（对应 get_observation() 返回的 dict key）
+    joint_names:
+      - "j1"
+      - "j2"
+
+    # 初始关节位置
+    initial_joint_positions: [0.0, 0.1]
+
+    # 最大关节速度 (rad/s)
+    max_joint_speed_rad_s: 1.5
+
+    # 模拟相机图像规格
+    image_specs:
+      front:
+        h: 480
+        w: 640
+        c: 3
+      wrist:
+        h: 240
+        w: 320
+        c: 3
+
+    # 命名命令配置（可选）。命令名需在 adapter.get_supported_commands() 中声明。
+    # Dummy adapter 声明的命令: go_home
+    commands:
+      go_home:
+        joints: [0.0, 0.0]
+
+# =============================================================================
+# 3. 设备翻译器 (Translator)
+#
+# 当前统一使用 configurable 类型，通过下方 device_to_r2c / r2c_to_device
+# 的 mapping 规则驱动数据转换。
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 4. 上行映射: 设备数据 → R2C Observations (Device to R2C)
+#
+# 将 adapter.get_observation() 返回的原始观测数据映射为 R2C 标准格式。
+# 支持多种 mapping 模式，见下方示例。
+# =============================================================================
+device_to_r2c:
+  task: "example pick and place task"
+  image_encoding: jpeg           # 图像传输编码: jpeg, png, raw
+
+  mappings:
+    # ── 模式1: default — 静态默认值，无需数据源 ──
+    - target_key: "joint_states.names"
+      default: ["joint_1", "joint_2"]
+
+    # ── 模式2: source_paths — 从 observation 中读取多个字段，按顺序拼接 ──
+    - target_key: "joint_states.position"
+      source_paths: ["j1", "j2"]
+      use_lookup_dotted: false   # false = 直接按 key 名查找，不做点分路径解析
+
+    # ── 模式3: source_path — 单字段 + transforms 管道 ──
+    - target_key: "images.color.front"
+      source_path: "front"
+      transforms: ndarray_to_jpeg
+
+    - target_key: "images.color.wrist"
+      source_path: "wrist"
+      transforms: ndarray_to_jpeg
+
+# =============================================================================
+# 5. 下行映射: R2C Actions → 设备指令 (R2C to Device)
+#
+# 将云端返回的 R2C 标准 action 拆解为 adapter.send_action() 能识别的设备命令。
+# 每个 mapping 将 action 中 source 字段的 source_index 位置写入 target。
+# =============================================================================
+r2c_to_device:
+  mappings:
+    - target: "j1"
+      source: "joint_states.position"
+      source_index: 0
+      use_assign_dotted: false
+      required: true
+
+    - target: "j2"
+      source: "joint_states.position"
+      source_index: 1
+      use_assign_dotted: false
+      required: true

@@ -1,0 +1,311 @@
+# =============================================================================
+# R2C Edge Configuration — Universal Robots UR5e (ROS2)
+#
+# 描述: 通过 ur_robot_driver 驱动的 UR5e 机械臂配置。
+#       适用于已安装 ros-humble-ur-robot-driver (或 jazzy/rolling) 的环境。
+#
+# 前置条件:
+#   1. 安装 UR ROS2 Driver:
+#        sudo apt install ros-${ROS_DISTRO}-ur-robot-driver
+#   2. 启动 UR5e 驱动:
+#        ros2 launch ur_robot_driver ur_control.launch.py \
+#            ur_type:=ur5e robot_ip:=192.168.56.101 \
+#            launch_rviz:=false
+#   3. 激活前向位置控制器 (二选一):
+#        # 方式 A: 前向位置控制 (推荐，topic 直驱，延迟最低)
+#        ros2 control switch_controllers --activate forward_position_controller \
+#            --deactivate scaled_joint_trajectory_controller
+#        # 方式 B: 缩放轨迹控制 (支持速度滑块和安全暂停)
+#        ros2 control switch_controllers --activate scaled_joint_trajectory_controller
+#
+# 用法:
+#   python -m r2c_sdk.cloudroboclient \
+#     --client-config config/client_config.yaml \
+#     --robot-config config/robot_ur5e_ros_config.yaml
+# =============================================================================
+
+schema_version: "v2.1"
+robot_id: "ur5e_001"
+task_name: "ur5e_pick_and_place"
+
+# =============================================================================
+# 运行时配置
+# =============================================================================
+runtime:
+  # 动作执行频率 (Hz)，同时决定观测发布检查频率。建议 10–30 Hz
+  publish_hz: 20.0
+  # 最大运行时长 (秒)，0 表示一直运行，Ctrl+C 停止
+  max_duration_s: 0.0
+  # dry_run=true 时不执行推理出来的 action，但正常发送观测数据。适用于不需要机器人真正运动，但需要发送真实观测数据的调试场景
+  dry_run: false
+  # 发布观测后等待 action 的超时 (秒)，超时后重新发布观测。弱网 / 大模型场景建议 ≥ 30 s
+  action_response_timeout_s: 30.0
+  # 每次 chunk 最多入队的 action 步数，多余的丢弃。-1 表示全部采用
+  max_enqueue_actions_per_chunk: -1
+  # 是否启用 action chunk 对齐（避免轨迹跳跃）
+  enable_action_chunk_alignment: true
+  # 启动时跳过的 observation 数量（让动作队列预先填满后再开始执行）
+  skip_initial_observations: 1
+
+  # ── 异步请求融合配置 ─────────────────────────────────────────────
+  async_request:
+    enabled: false
+
+    publish_trigger_threshold: 0
+
+    fusion:
+      strategy: replace
+      window_size: 10
+      # state_types:  # 示例 (按实际 DOF 修改):
+      #   - joint_angle
+      #   - joint_angle
+      # state_type_order:
+      #   euler: rpy
+      #   quaternion: wxyz
+  # ── end async_request ─────────────────────────────────────────────
+
+  # 键盘控制：空格 = 暂停/恢复，h = 回 home (暂停时)，e = 优雅退出
+  keyboard_control:
+    enabled: true
+    # keymap:  # 自定义按键映射 (可选)
+
+hardware:
+  type: ros2
+  config:
+    # ROS2 节点名 (同一台机器上运行多个 R2C 实例时需唯一)
+    node_name: r2c_ur5e
+
+    # rclpy spin 超时 (秒)，控制回调响应延迟
+    spin_timeout_sec: 0.05
+
+    # 是否自动启动 spin 线程
+    auto_spin: true
+
+    # ── 订阅 (上行: 机器人 → R2C) ──────────────────────────────
+
+    subscriptions:
+      # --- 关节状态 (必选) ---
+      # UR5e 6 个旋转关节: shoulder_pan, shoulder_lift, elbow,
+      #                    wrist_1, wrist_2, wrist_3
+      joint_states:
+        topic: /joint_states
+        msg_type: sensor_msgs.msg.JointState
+        qos: 10
+        store_as: joint_states
+        max_update_hz: 30
+        include_fields: ["name", "position", "velocity", "effort"]
+        field_aliases:
+          name: names
+
+      # --- IO 状态 (可选: 用于监控工具/夹爪数字IO) ---
+      # UR5e 工具端提供 2路数字输入 + 2路数字输出 + 2路模拟输入
+      # 标准 Robotiq 夹爪通常使用 tool digital output 0 和 1
+      io_states:
+        topic: /io_and_status_controller/io_states
+        msg_type: ur_dashboard_msgs.msg.IOState
+        qos: 10
+        store_as: io_states
+        max_update_hz: 10
+
+      # --- 力/力矩传感器 (可选: 仅当 UR5e 配备内置 F/T 传感器) ---
+      # 大多数 UR5e 无内置 F/T 传感器，如未安装请注释掉
+      # ft_sensor:
+      #   topic: /force_torque_sensor_broadcaster/wrench
+      #   msg_type: geometry_msgs.msg.WrenchStamped
+      #   qos: 10
+      #   store_as: ft_wrench
+      #   max_update_hz: 100
+
+      # --- 速度缩放 (可选: 监控示教器速度滑块) ---
+      # 0.0-1.0，由示教器速度滑块控制
+      speed_scaling:
+        topic: /speed_scaling_state_broadcaster/speed_scaling
+        msg_type: std_msgs.msg.Float64
+        qos: 10
+        store_as: speed_scaling
+        max_update_hz: 10
+
+      # --- 外部相机 (按实际硬件配置) ---
+      # 前置 RGB 相机 — 请根据实际相机驱动 topic 调整
+      # front_camera:
+      #   topic: /camera_front/color/image_raw
+      #   msg_type: sensor_msgs.msg.Image
+      #   qos: 10
+      #   store_as: front
+      #   store_raw_message: true
+      #   max_update_hz: 15
+
+      # 腕部 RGB 相机 — 请根据实际相机驱动 topic 调整
+      # wrist_camera:
+      #   topic: /camera_wrist/color/image_raw
+      #   msg_type: sensor_msgs.msg.Image
+      #   qos: 10
+      #   store_as: wrist
+      #   store_raw_message: true
+      #   max_update_hz: 15
+
+    # ── 命令发布器 (下行: R2C → 机器人) ──────────────────────────
+
+    command_publishers:
+      # --- 前向位置控制 (推荐) ---
+      # 直接发送目标关节角度 (rad)，UR5e 通过 servoj() 执行
+      # 需要先激活 forward_position_controller:
+      #   ros2 control switch_controllers --activate forward_position_controller
+      arm:
+        topic: /forward_position_controller/commands
+        msg_type: std_msgs.msg.Float64MultiArray
+        qos: 10
+
+    # ── 命令服务 (可选: 基于 Action/Service 的轨迹控制) ──────────
+
+    command_services:
+      # --- 缩放轨迹控制 (备选: 支持示教器速度滑块) ---
+      # 如果你更偏好通过 FollowJointTrajectory action 发送轨迹，
+      # 取消下面的注释，并把 default_command_publisher 改为空
+      # 同时注释掉上面的 command_publishers.arm
+      # arm_trajectory:
+      #   service: /scaled_joint_trajectory_controller/follow_joint_trajectory
+      #   srv_type: control_msgs.action.FollowJointTrajectory
+      #   timeout_sec: 5.0
+      #
+      # 如果使用标准 joint_trajectory_controller (不推荐):
+      # arm_trajectory:
+      #   service: /joint_trajectory_controller/follow_joint_trajectory
+      #   srv_type: control_msgs.action.FollowJointTrajectory
+      #   timeout_sec: 5.0
+
+    # ── 默认传输选择 ─────────────────────────────────────────────
+
+    # 使用前向位置控制器作为默认指令通道
+    default_command_publisher: arm
+    # default_command_service: arm_trajectory
+
+    # ── 目标映射 ─────────────────────────────────────────────────
+
+    action_targets:
+      arm: arm
+      # gripper: gripper
+
+    # service_targets:
+    #   arm_service: arm_trajectory
+
+    # ── 适配器级命令 ────────────────────────────────────────────
+
+    commands:
+      go_home:
+        # 关节复位目标 (rad)，长度 = 机器人 DOF
+        joints: [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
+        # ROS2 适配器要求每个 go_home 显式声明传输通道 (ADR-0005)。
+        # 这里走 command_publishers.arm (Float64MultiArray topic)，
+        # data.data 即发布到 /forward_position_controller/commands 的关节角数组。
+        ros2:
+          kind: topic
+          target: arm
+          data:
+            data: [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
+
+# =============================================================================
+# 设备翻译器: 配置驱动映射
+# =============================================================================
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 上行映射: ROS2 原始数据 → R2C Observations
+# =============================================================================
+device_to_r2c:
+  task: "pick and place"
+  mappings:
+    # --- 关节名 (默认值，硬件不提供时使用) ---
+    - target_key: "joint_states.names"
+      default:
+        - shoulder_pan_joint
+        - shoulder_lift_joint
+        - elbow_joint
+        - wrist_1_joint
+        - wrist_2_joint
+        - wrist_3_joint
+
+    # --- 关节位置 ---
+    # 从 /joint_states 的 position 字段提取 6 个关节值
+    - target_key: "joint_states.position"
+      source_path: streams.joint_states.position
+      transforms:
+        - array_to_list
+
+    # --- 关节速度 ---
+    - target_key: "joint_states.velocity"
+      source_path: streams.joint_states.velocity
+      transforms:
+        - array_to_list
+
+    # --- 关节力矩 ---
+    - target_key: "joint_states.effort"
+      source_path: streams.joint_states.effort
+      transforms:
+        - array_to_list
+
+    # --- 末端位姿 (从 TF 获取 tool0 在 base 下的位姿) ---
+    # 注: 需要 UR ROS2 Driver 发布 /tf topic
+    # R2C 当前通过 joint_states + URDF 做正运动学计算，或
+    # 订阅 /tf 中 base → tool0 的变换。
+    # 此处留空，由端侧 HardwareAdapter 的正运动学补充。
+
+    # --- IO 状态 → 夹爪开度估计 ---
+    # UR5e 工具端数字输出通常用于控制夹爪。
+    # 如果你有独立的夹爪状态 topic，请替换此映射。
+    # - target_key: "joint_states.gripper_position"
+    #   source_path: streams.io_states.digital_out_0
+    #   transforms:
+    #     - digital_io_to_gripper:
+    #         open_value: 1.0
+    #         close_value: 0.0
+
+    # --- 外部相机图像 (请根据实际相机 topic 取消注释) ---
+    # - target_key: "images.color.front"
+    #   source_path: "streams.front"
+    #   transforms:
+    #     - ros_image_to_ndarray
+    #     - ndarray_to_jpeg
+
+    # - target_key: "images.color.wrist"
+    #   source_path: "streams.wrist"
+    #   transforms:
+    #     - ros_image_to_ndarray
+    #     - ndarray_to_jpeg
+
+# =============================================================================
+# 下行映射: R2C Actions → ROS2 设备指令
+# =============================================================================
+r2c_to_device:
+  mappings:
+    # --- 关节目标 → 前向位置控制器指令 ---
+    # 将 action 中的关节位置数组 (长度 6) 转换为 Float64MultiArray
+    - target: commands_by_publisher.arm.data
+      source: joint_states.position
+      transforms:
+        - list_to_ros_float64_multi_array
+
+    # 如果你有夹爪控制 publisher，取消下面的注释:
+    # --- 夹爪控制 (通过数字 IO 或独立夹爪 topic) ---
+    # - target: commands_by_publisher.gripper.data
+    #   source: joint_states.gripper_position
+
+# =============================================================================
+# 参考命令
+# =============================================================================
+# 查看控制器状态:
+#   ros2 control list_controllers
+#
+# 切换到前向位置控制:
+#   ros2 control switch_controllers \
+#       --activate forward_position_controller \
+#       --deactivate scaled_joint_trajectory_controller
+#
+# 手动发送测试关节目标:
+#   ros2 topic pub /forward_position_controller/commands \
+#       std_msgs/msg/Float64MultiArray \
+#       "{data: [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]}"
+#
+# 查看当前关节状态:
+#   ros2 topic echo /joint_states

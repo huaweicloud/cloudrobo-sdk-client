@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "common.proto";
+import "google/protobuf/timestamp.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "ImuStateProto";
+option java_multiple_files = false;
+
+message IMUState {
+  google.protobuf.Timestamp timestamp = 1;
+  // Source of the state message (e.g., "robot", "simulator", "edge_gateway")
+  string source = 2;
+  string name = 3;
+  
+  // Orientation quaternion [x, y, z, w]
+  Quaternion orientation = 4;
+  
+  // Angular velocity [x, y, z] in rad/s
+  Vector3 angular_velocity = 5;
+  
+  // Linear acceleration [x, y, z] in m/s^2
+  Vector3 linear_acceleration = 6;
+
+  // Magnetic field [x, y, z] in Tesla
+  Vector3 magnetic_field = 7;
+  
+  // Row-major representation of the 3x3 covariance matrix (9 elements)
+  repeated double orientation_covariance = 8;
+  repeated double angular_velocity_covariance = 9;
+  repeated double linear_acceleration_covariance = 10;
+  repeated double magnetic_field_covariance = 11;
+}

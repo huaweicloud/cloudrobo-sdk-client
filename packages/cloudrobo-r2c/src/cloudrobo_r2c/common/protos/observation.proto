@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+import "common.proto";
+import "image_raw.proto";
+import "image_h264.proto";
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "ObservationProto";
+option java_multiple_files = false;
+
+/**
+ * Robot Observations
+ * Topic: {project_id}/{device_id}/inference/observations
+ */
+message Observations {
+  int64 timestamp = 1;
+  string task = 2;
+  
+  // Optional ID
+  int64 id = 3;
+  
+  // Image Encoding Label (e.g., "raw", "h264")
+  string image_encoding = 4;
+
+  // Polymorphic Image Payload
+  oneof image_payload {
+    ImageGroups raw_images = 5;
+    H264ImageData h264_images = 6;
+  }
+
+  JointStates joint_states = 7;
+  EndEffectorPoses end_effector_poses = 8;
+  EndEffectorStates end_effector_states = 9;
+  Localization localization = 10;
+  repeated PointCloud pointclouds = 11;
+
+  // User-defined extension fields (self-describing)
+  map<string, ExtensionValue> extensions = 12;
+}
+
+message JointStates {
+  repeated string names = 1;
+  repeated double position = 2;
+  repeated double velocity = 3;
+  repeated double torque = 4;
+}
+
+message EndEffectorPoses {
+  repeated string names = 1;
+  repeated Pose7D pose = 2;
+}
+
+message EndEffectorStates {
+  repeated string names = 1;
+  repeated double position = 2;
+  repeated double force = 3;
+}
+
+message Localization {
+  repeated double odom_pose = 1;
+  repeated double map_pose = 2;
+}
+
+message PointCloud {
+  bytes data = 1;
+  string name = 2;
+}
