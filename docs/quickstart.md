@@ -67,17 +67,7 @@ cloudrobo train create-task --config-file train-config.json
 }
 ```
 
-### 第六步：评测模型
-
-```bash
-cloudrobo eval create-job \
-  --name skill-eval \
-  --virtual-world-id d6e7f8a9-b0c1-2345-defa-456789012345 \
-  --infer-server-id f8a9b0c1-d2e3-4567-fabc-678901234567 \
-  --model-source CLOUDROBO_SQUARE
-```
-
-### 第七步：注册机器人
+### 第六步：注册机器人
 
 ```bash
 cloudrobo robot create \
@@ -88,7 +78,7 @@ cloudrobo robot create \
   --workspace-id c1d2e3f4-a5b6-7890-cdef-901234567890
 ```
 
-### 第八步：部署推理服务
+### 第七步：部署推理服务
 
 ```bash
 # 创建推理服务

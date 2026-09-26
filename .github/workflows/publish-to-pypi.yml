@@ -43,7 +43,6 @@ jobs:
           - { name: hw-cloudrobo-asset,     dir: packages/cloudrobo-asset }
           - { name: hw-cloudrobo-dataset,   dir: packages/cloudrobo-dataset }
           - { name: hw-cloudrobo-train,     dir: packages/cloudrobo-train }
-          - { name: hw-cloudrobo-eval,      dir: packages/cloudrobo-eval }
           - { name: hw-cloudrobo-infer,     dir: packages/cloudrobo-infer }
           - { name: hw-cloudrobo-dispatch,  dir: packages/cloudrobo-dispatch }
           - { name: hw-cloudrobo-workspace, dir: packages/cloudrobo-workspace }
@@ -105,7 +104,6 @@ jobs:
           - hw-cloudrobo-asset
           - hw-cloudrobo-dataset
           - hw-cloudrobo-train
-          - hw-cloudrobo-eval
           - hw-cloudrobo-infer
           - hw-cloudrobo-dispatch
           - hw-cloudrobo-workspace
@@ -160,7 +158,6 @@ jobs:
           - hw-cloudrobo-asset
           - hw-cloudrobo-dataset
           - hw-cloudrobo-train
-          - hw-cloudrobo-eval
           - hw-cloudrobo-infer
           - hw-cloudrobo-dispatch
           - hw-cloudrobo-workspace
@@ -195,4 +192,3 @@ jobs:
 
       - name: Publish hw-cloudrobo-client to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-

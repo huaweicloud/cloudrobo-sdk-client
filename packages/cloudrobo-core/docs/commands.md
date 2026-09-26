@@ -37,7 +37,6 @@ cloudrobo-core 注册了以下命令组入口，具体命令在各功能包中�
 | `asset` | cloudrobo-asset | 资产管理 |
 | `dataset` | cloudrobo-dataset | 数据集处理 |
 | `train` | cloudrobo-train | 模型训练 |
-| `eval` | cloudrobo-eval | 模型评测 |
 | `infer` | cloudrobo-infer | 推理服务 |
 | `robot` | cloudrobo-robot | 机器人管理 |
 | `dispatch` | cloudrobo-dispatch | 智能体调度 |

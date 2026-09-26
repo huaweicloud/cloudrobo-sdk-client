@@ -43,9 +43,6 @@ pip install -e packages/cloudrobo-dataset
 # 模型训练
 pip install -e packages/cloudrobo-train
 
-# 模型评测
-pip install -e packages/cloudrobo-eval
-
 # 推理服务
 pip install -e packages/cloudrobo-infer
 

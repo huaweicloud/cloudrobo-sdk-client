@@ -16,7 +16,6 @@
 | 资产管理 | 仓库和资源管理 | [docs/](../packages/cloudrobo-asset/docs/index.md) |
 | 数据集 | 数据预处理和转换 | [docs/](../packages/cloudrobo-dataset/docs/index.md) |
 | 模型训练 | 模型微调和训练 | [docs/](../packages/cloudrobo-train/docs/index.md) |
-| 模型评测 | 技能仿真评测 | [docs/](../packages/cloudrobo-eval/docs/index.md) |
 | 推理服务 | 推理服务管理 | [docs/](../packages/cloudrobo-infer/docs/index.md) |
 | 机器人管理 | 机器人注册和管理 | [docs/](../packages/cloudrobo-robot/docs/index.md) |
 | 智能体调度 | 会话和任务执行 | [docs/](../packages/cloudrobo-dispatch/docs/index.md) |

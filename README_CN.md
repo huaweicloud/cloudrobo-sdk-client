@@ -9,7 +9,6 @@ CloudRobo 命令行工具与 Python SDK，用于华为云具身智能平台（Cl
 - **资产管理**：管理模型、数据集、算法等资产的生命周期
 - **数据处理**：创建和监控数据处理任务（数据清洗、格式转换等）
 - **模型训练**：提交和监控模型训练任务（预训练、微调、仿真强化学习）
-- **模型评测**：创建仿真评测任务，评估模型性能
 - **推理服务**：部署和管理模型推理服务
 - **机器人管理**：注册机器人、导出设备证书
 - **智能体调度**：在机器人上执行具身智能任务
@@ -90,7 +89,6 @@ cloudrobo workspace list
 | cloudrobo-asset | 资产管理 | [docs/](packages/cloudrobo-asset/docs/index.md) |
 | cloudrobo-dataset | 数据集处理 | [docs/](packages/cloudrobo-dataset/docs/index.md) |
 | cloudrobo-train | 模型训练 | [docs/](packages/cloudrobo-train/docs/index.md) |
-| cloudrobo-eval | 模型评测 | [docs/](packages/cloudrobo-eval/docs/index.md) |
 | cloudrobo-infer | 推理服务 | [docs/](packages/cloudrobo-infer/docs/index.md) |
 | cloudrobo-robot | 机器人管理 | [docs/](packages/cloudrobo-robot/docs/index.md) |
 | cloudrobo-dispatch | 智能体调度 | [docs/](packages/cloudrobo-dispatch/docs/index.md) |
@@ -109,7 +107,6 @@ cloudrobo-client/
 │   ├── cloudrobo-asset/         # 资产管理
 │   ├── cloudrobo-dataset/       # 数据集处理
 │   ├── cloudrobo-train/         # 模型训练
-│   ├── cloudrobo-eval/          # 模型评测
 │   ├── cloudrobo-infer/         # 推理服务
 │   ├── cloudrobo-robot/         # 机器人管理
 │   ├── cloudrobo-dispatch/      # 智能体调度

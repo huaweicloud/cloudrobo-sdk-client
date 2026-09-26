@@ -9,7 +9,6 @@ CloudRobo command-line tool and Python SDK for Huawei Cloud's Embodied Intellige
 - **Asset Management**: Manage lifecycle of models, datasets, and algorithms
 - **Data Processing**: Create and monitor data processing tasks (cleaning, format conversion, etc.)
 - **Model Training**: Submit and monitor training tasks (pre-training, fine-tuning, simulation reinforcement learning)
-- **Model Evaluation**: Create simulation evaluation tasks to assess model performance
 - **Inference Service**: Deploy and manage model inference services
 - **Robot Management**: Register robots and export device certificates
 - **Task Dispatch**: Execute embodied intelligence tasks on robots
@@ -90,7 +89,6 @@ Each functional module's documentation is maintained by its respective package:
 | cloudrobo-asset | Asset Management | [docs/](packages/cloudrobo-asset/docs/index.md) |
 | cloudrobo-dataset | Dataset Processing | [docs/](packages/cloudrobo-dataset/docs/index.md) |
 | cloudrobo-train | Model Training | [docs/](packages/cloudrobo-train/docs/index.md) |
-| cloudrobo-eval | Model Evaluation | [docs/](packages/cloudrobo-eval/docs/index.md) |
 | cloudrobo-infer | Inference Service | [docs/](packages/cloudrobo-infer/docs/index.md) |
 | cloudrobo-robot | Robot Management | [docs/](packages/cloudrobo-robot/docs/index.md) |
 | cloudrobo-dispatch | Task Dispatch | [docs/](packages/cloudrobo-dispatch/docs/index.md) |
@@ -109,7 +107,6 @@ cloudrobo-client/
 │   ├── cloudrobo-asset/         # Asset management
 │   ├── cloudrobo-dataset/       # Dataset processing
 │   ├── cloudrobo-train/         # Model training
-│   ├── cloudrobo-eval/          # Model evaluation
 │   ├── cloudrobo-infer/         # Inference service
 │   ├── cloudrobo-robot/         # Robot management
 │   ├── cloudrobo-dispatch/      # Task dispatch

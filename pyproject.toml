@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hw-cloudrobo-client"
-version = "0.1.0"
+version = "0.2.1"
 description = "CloudRobo Client - All Packages Bundle"
 requires-python = ">=3.8"
 authors = [
@@ -39,7 +39,6 @@ dependencies = [
     "hw-cloudrobo-asset==0.1.0",
     "hw-cloudrobo-dataset==0.1.0",
     "hw-cloudrobo-train==0.1.0",
-    "hw-cloudrobo-eval==0.1.0",
     "hw-cloudrobo-infer==0.1.0",
     "hw-cloudrobo-dispatch==0.1.0",
     "hw-cloudrobo-workspace==0.1.0",
