@@ -41,6 +41,73 @@ EVAL_TASK_REQUIRED_FIELDS = [
 
 SPEC_REQUIRED_KEYS = ["cpu", "memory"]
 
+# show-task(ProcTask) 返回字段 → copy-task(CreateTaskDto) 请求字段映射
+# 参考 OpenAPI 中 ProcTask 与 CreateTaskDto 的定义
+PROC_TASK_COPY_FIELD_MAP = {
+    "name": "name",
+    "description": "description",
+    "workspace_id": "workspace_id",
+    "catalog_id": "catalog_id",
+    "cluster_type": "cluster_type",
+    "image": "image",
+    "envs": "envs",
+    "task_framework_type": "task_framework_type",
+    "algo_asset_type": "algo_type",
+    "algo_id": "algo_id",
+    "algo_name": "algo_name",
+    "algo_path": "algo_path",
+    "job_local_path": "job_local_path",
+    "dataset_configs": "dataset_configs",
+    "task_entrance": "algo_entrance",
+    "target_asset_type": "output_type",
+    "target_asset_id": "output_id",
+    "target_asset_name": "output_name",
+    "target_asset_path": "output_path",
+    "resource_pool_type": "resource_pool_type",
+    "resource_id": "resource_id",
+    "dedicated_pool_name": "dedicated_pool_name",
+    "head_spec": "head_spec",
+    "worker_spec": "worker_spec",
+    "worker_num": "worker_num",
+}
+
+# show-task(EvalTask) 返回字段 → copy-task(CreateEvalTaskDto) 请求字段映射
+# 参考 OpenAPI 中 EvalTask 与 CreateEvalTaskDto 的定义
+EVAL_TASK_COPY_FIELD_MAP = {
+    "name": "name",
+    "description": "description",
+    "workspace_id": "workspace_id",
+    "algo_id": "algo_id",
+    "algo_name": "algo_name",
+    "task_entrance": "algo_entrance",
+    "source_asset_type": "dataset_type",
+    "source_asset_id": "dataset_id",
+    "source_asset_name": "dataset_name",
+    "source_asset_path": "dataset_path",
+    "image": "image",
+    "robot_config": "robot_config",
+    "resource_pool_type": "resource_pool_type",
+    "resource_id": "resource_id",
+    "dedicated_pool_name": "dedicated_pool_name",
+    "worker_spec": "worker_spec",
+}
+
+
+def _build_copy_request(task_detail: Dict, field_map: Optional[Dict] = None) -> Dict:
+    """根据 show-task 返回的任务详情构造 copy-task 请求体
+
+    按 field_map 提取源任务配置字段（忽略 id/status 等运行态字段），
+    仅保留有值的字段。field_map 为空时使用数据处理任务(PROC_TASK_COPY_FIELD_MAP)映射。
+    """
+    if not isinstance(task_detail, dict):
+        return {}
+    mapping = field_map if field_map is not None else PROC_TASK_COPY_FIELD_MAP
+    return {
+        dst: task_detail[src]
+        for src, dst in mapping.items()
+        if task_detail.get(src) is not None
+    }
+
 
 def _validate_task_config(req: Dict, task_type: str = "proc") -> None:
     """校验任务配置参数：除 description 外，其他参数不能为空值
@@ -160,8 +227,36 @@ class DatasetClient(BaseClient):
     def get_task_detail(self, task_id: str) -> Dict:
         return self._client.get(self._url(f"/v1/data-eng/proc-tasks/{task_id}"))
 
-    def restart_task(self, task_id: str) -> Dict:
-        return self._client.post(self._url(f"/v1/data-eng/proc-tasks/{task_id}/restart"))
+    def copy_task(self, task_id: str, req: Optional[Dict] = None) -> Dict:
+        """复制数据处理任务
+
+        先调用 show-task（get_task_detail）获取源任务信息并填充到复制请求体，
+        再以 req 中的字段覆盖（name 必填），最后发起复制请求。
+        新任务创建成功后进入排队中（PENDING）状态。
+
+        Args:
+            task_id: 被复制的源任务ID（UUID格式）
+            req: 覆盖字段，必须包含新的任务名称 name，其余 body 参数可选
+
+        Returns:
+            任务详情响应（ProcTaskDetailResponse），payload.id 为新任务ID
+        """
+        req = req or {}
+        task_detail = self.get_task_detail(task_id)
+        detail = task_detail.get("payload", task_detail) if isinstance(task_detail, dict) else {}
+        base_req = _build_copy_request(detail)
+        base_req.update({k: v for k, v in req.items() if v is not None})
+
+        if not base_req.get("name"):
+            raise DatasetError(
+                "复制任务失败: 缺少新任务名称 name",
+                "请通过 --name 指定新任务名称",
+            )
+
+        return self._client.post(
+            self._url(f"/v1/data-eng/proc-tasks/{task_id}/copy"),
+            json=base_req,
+        )
 
     def list_log_files(self, task_id: str, is_system: bool = True) -> Dict:
         """获取任务日志文件列表"""
@@ -227,20 +322,22 @@ class DatasetClient(BaseClient):
             }.items() if v != "" and v is not None}
         )
 
-    def get_task_frames(self, task_id: str, prefix: str = "") -> Dict:
+    def get_task_frames(self, task_id: str, prefix: str = "",
+                        max_keys: Optional[int] = None, next_marker: str = "") -> Dict:
         return self._client.get(
             self._url(f"/v1/data-eng/proc-tasks/{task_id}/frames"),
-            params={"prefix": prefix} if prefix else None
+            params={k: v for k, v in {
+                "prefix": prefix, "max_keys": max_keys, "next_marker": next_marker,
+            }.items() if v != "" and v is not None}
         )
 
-    def get_task_preview(self, task_id: str, file_name: str) -> Dict:
+    def get_task_preview(self, task_id: str, file_name: str, is_download: bool = False) -> Dict:
         return self._client.get(
             self._url(f"/v1/data-eng/proc-tasks/{task_id}/preview"),
-            params={"file_name": file_name}
+            params={"file_name": file_name, "is_download": is_download}
         )
 
-    def get_task_resource_usage(self, task_id: str, metric: str, start: int, end: int, step: int,
-                                pod_name: str) -> Dict:
+    def get_task_resource_usage(self, task_id: str, metric: str, start: int, end: int, step: int) -> Dict:
         """获取数据处理任务的资源监控数据
 
         Args:
@@ -249,18 +346,28 @@ class DatasetClient(BaseClient):
             start: 起始时间戳（秒）
             end: 结束时间戳（秒）
             step: 采样间隔（秒），范围 10-3600
-            pod_name: 容器名
         """
         return self._client.get(
             self._url(f"/v1/data-eng/proc-tasks/{task_id}/resource-usage"),
-            params={"metric": metric, "start": start, "end": end, "step": step, "pod_name": pod_name}
+            params={"metric": metric, "start": start, "end": end, "step": step}
         )
 
-    def download_task_log(self, task_id: str, file_name: str, file_path: str) -> Any:
+    def get_task_events(self, task_id: str) -> Dict:
+        """查询数据处理任务事件列表
+
+        返回任务运行过程中的事件（正常/告警）、首次/最后发生时间、描述及次数。
+
+        Args:
+            task_id: 任务ID
+        """
+        return self._client.get(self._url(f"/v1/data-eng/proc-tasks/{task_id}/events"))
+
+    def download_task_log(self, task_id: str, file_name: str, file_path: str,
+                          is_download: bool = False) -> Any:
         """下载任务日志文件"""
         return self._client.get(
             self._url(f"/v1/data-eng/proc-tasks/{task_id}/logs/{file_name}/download"),
-            params={"file_path": file_path}
+            params={"file_path": file_path, "is_download": is_download}
         )
 
     # ---- eval-tasks ----
@@ -290,6 +397,37 @@ class DatasetClient(BaseClient):
 
     def get_eval_task_detail(self, task_id: str) -> Dict:
         return self._client.get(self._url(f"/v1/data-eng/eval-tasks/{task_id}"))
+
+    def copy_eval_task(self, task_id: str, req: Optional[Dict] = None) -> Dict:
+        """复制数据评测任务
+
+        先调用 eval show-task（get_eval_task_detail）获取源任务信息并填充到复制请求体，
+        再以 req 中的字段覆盖（name 必填），最后发起复制请求。
+        新任务创建成功后进入排队中（PENDING）状态。
+
+        Args:
+            task_id: 被复制的源评测任务ID（UUID格式）
+            req: 覆盖字段，必须包含新的任务名称 name，其余 body 参数可选
+
+        Returns:
+            任务详情响应（EvalTaskDetailResponse），payload.id 为新任务ID
+        """
+        req = req or {}
+        task_detail = self.get_eval_task_detail(task_id)
+        detail = task_detail.get("payload", task_detail) if isinstance(task_detail, dict) else {}
+        base_req = _build_copy_request(detail, EVAL_TASK_COPY_FIELD_MAP)
+        base_req.update({k: v for k, v in req.items() if v is not None})
+
+        if not base_req.get("name"):
+            raise DatasetError(
+                "复制评测任务失败: 缺少新任务名称 name",
+                "请通过 --name 指定新任务名称",
+            )
+
+        return self._client.post(
+            self._url(f"/v1/data-eng/eval-tasks/{task_id}/copy"),
+            json=base_req,
+        )
 
     def update_eval_task(self, task_id: str, req: Dict) -> Dict:
         return self._client.patch(self._url(f"/v1/data-eng/eval-tasks/{task_id}"), json=req)
@@ -362,12 +500,23 @@ class DatasetClient(BaseClient):
             params={"file_name": file_name, "isDownload": is_download}
         )
 
-    def download_eval_task_log(self, task_id: str, file_name: str, file_path: str) -> Any:
+    def download_eval_task_log(self, task_id: str, file_name: str, file_path: str,
+                               is_download: bool = False) -> Any:
         """下载评测任务日志文件"""
         return self._client.get(
             self._url(f"/v1/data-eng/eval-tasks/{task_id}/logs/{file_name}/download"),
-            params={"file_path": file_path}
+            params={"file_path": file_path, "is_download": is_download}
         )
+
+    def get_eval_task_events(self, task_id: str) -> Dict:
+        """查询数据评测任务事件列表
+
+        返回任务运行过程中的事件（正常/告警）、首次/最后发生时间、描述及次数。
+
+        Args:
+            task_id: 评测任务ID
+        """
+        return self._client.get(self._url(f"/v1/data-eng/eval-tasks/{task_id}/events"))
 
     TERMINAL_STATES = {"SUCCEEDED", "FAILED", "DELETED"}
 

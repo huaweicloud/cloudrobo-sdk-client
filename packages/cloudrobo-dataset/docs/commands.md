@@ -16,10 +16,13 @@ cloudrobo dataset [OPTIONS] COMMAND [ARGS]...
 | `list-tasks` | 列出处理任务 |
 | `show-task` | 查看任务详情 |
 | `wait-task` | 等待任务到达终态 |
-| `restart-task` | 重启任务 |
+| `copy-task` | 复制数据处理任务 |
+| `get-frames` | 查看任务帧数据 |
 | `get-log` | 获取任务日志 |
 | `get-preview` | 预览任务数据 |
+| `download-log` | 下载任务日志文件 |
 | `get-resource-usage` | 获取任务资源监控数据 |
+| `get-events` | 查看任务事件列表 |
 
 ### eval 子命令组
 
@@ -28,12 +31,14 @@ cloudrobo dataset [OPTIONS] COMMAND [ARGS]...
 | `eval create-task` | 创建数据评测任务 |
 | `eval list-tasks` | 列出评测任务 |
 | `eval show-task` | 查看评测任务详情 |
+| `eval copy-task` | 复制数据评测任务 |
 | `eval update-task` | 修改评测任务 |
 | `eval delete-task` | 删除评测任务 |
 | `eval get-log` | 获取评测任务日志 |
 | `eval get-preview` | 获取评测报告预览/下载链接 |
 | `eval wait-task` | 等待评测任务到达终态 |
 | `eval download-log` | 下载评测任务日志文件 |
+| `eval get-events` | 查看评测任务事件列表 |
 
 ## eval 命令详情
 
@@ -93,18 +98,18 @@ cloudrobo dataset eval create-task \
 ### eval list-tasks
 
 ```bash
-cloudrobo dataset eval list-tasks [--status <status>] [--name <name>] [--order-by <field>] [--order <DESC|ASC>] [--offset <n>] [--limit <n>] [--user-id <id>] [--dataset-name <name>] [--workspace-id <id>]
+cloudrobo dataset eval list-tasks [--status <status>] [--name <name>] [--order-by <field>] [--order <DESC|ASC>] [--offset <n>] [--limit <n>] [--user-name <name>] [--dataset-name <name>] [--workspace-id <id>]
 ```
 
 | 选项 | 必填 | 说明 |
 |------|------|------|
 | `--status` | 否 | 状态过滤（逗号分隔，如 RUNNING,SUCCEEDED,FAILED） |
 | `--name` | 否 | 按名称模糊查询 |
-| `--order-by` | 否 | 排序指标（start_at/update_at/finish_at） |
+| `--order-by` | 否 | 排序指标（start_at/update_at/finish_at/create_at） |
 | `--order` | 否 | 排序方式（DESC/ASC） |
 | `--offset` | 否 | 分页偏移量 |
 | `--limit` | 否 | 每页数量，默认20 |
-| `--user-id` | 否 | 创建者ID过滤 |
+| `--user-name` | 否 | 创建者名称过滤 |
 | `--dataset-name` | 否 | 数据集名称过滤 |
 | `--workspace-id` | 否 | 工作空间ID，不提供则使用默认配置 |
 
@@ -119,6 +124,35 @@ cloudrobo dataset eval show-task --task-id <id>
 | 选项 | 必填 | 说明 |
 |------|------|------|
 | `--task-id` | 是 | 任务ID |
+
+---
+
+### eval copy-task
+
+```bash
+cloudrobo dataset eval copy-task --task-id <id> --name <new-name> [--task-config <json>] [--wait] [--timeout <seconds>] [--dry-run]
+```
+
+| 选项 | 必填 | 说明 |
+|------|------|------|
+| `--task-id` | 是 | 被复制的源评测任务ID |
+| `--name` | 是 | 新任务名称 |
+| `--task-config` | 否 | 其余可选覆盖字段 JSON，如 `{"description":"...","dataset_name":"..."}` |
+| `--wait` | 否 | 复制后等待任务完成 |
+| `--timeout` | 否 | 等待超时秒数，默认1800（配合 `--wait` 使用） |
+| `--dry-run` | 否 | 仅预览 |
+
+复制流程：先根据 `--task-id` 调用 `eval show-task` 获取源任务的配置信息，将其填充到复制请求体中，再用 `--name`（必填）及 `--task-config` 中的字段覆盖，最后发起复制请求。新任务创建成功后进入排队中（PENDING）状态。
+
+**示例**:
+```bash
+# 指定新任务名称复制
+cloudrobo dataset eval copy-task --task-id <task-id> --name copy-eval
+
+# 指定新任务名称、覆盖部分字段并等待完成
+cloudrobo dataset eval copy-task --task-id <task-id> --name copy-eval \
+  --task-config '{"description":"从原评测任务复制"}' --wait
+```
 
 ---
 
@@ -197,7 +231,7 @@ cloudrobo dataset eval wait-task --task-id <id> [--timeout <seconds>] [--interva
 ### eval download-log
 
 ```bash
-cloudrobo dataset eval download-log --task-id <id> --file-name <name> --file-path <path>
+cloudrobo dataset eval download-log --task-id <id> --file-name <name> --file-path <path> [--is-download]
 ```
 
 | 选项 | 必填 | 说明 |
@@ -205,6 +239,21 @@ cloudrobo dataset eval download-log --task-id <id> --file-name <name> --file-pat
 | `--task-id` | 是 | 任务ID |
 | `--file-name` | 是 | 日志文件名 |
 | `--file-path` | 是 | 日志文件路径（通过 `eval get-log --is-system` 获取） |
+| `--is-download` | 否 | 返回OBS临时下载链接（默认返回日志内容） |
+
+---
+
+### eval get-events
+
+```bash
+cloudrobo dataset eval get-events --task-id <id>
+```
+
+| 选项 | 必填 | 说明 |
+|------|------|------|
+| `--task-id` | 是 | 任务ID |
+
+返回评测任务运行过程中的事件列表，包含事件类型（NORMAL/WARNING）、首次/最后发生时间（Unix 时间戳）、事件描述（message/cn_reason）及发生次数。
 
 ## 命令详情
 
@@ -262,7 +311,7 @@ cloudrobo dataset proc list-tasks [--status <status>] [--algo-type <type>] [--na
 | `--status` | 否 | 状态过滤（RUNNING/SUCCEEDED/FAILED 等） |
 | `--algo-type` | 否 | 算法类型过滤 |
 | `--name` | 否 | 按名称模糊查询 |
-| `--order-by` | 否 | 排序指标（start_at/update_at/finish_at） |
+| `--order-by` | 否 | 排序指标（start_at/update_at/finish_at/create_at） |
 | `--order` | 否 | 排序方式（DESC/ASC） |
 | `--offset` | 否 | 分页偏移量 |
 | `--limit` | 否 | 每页数量（1-100） |
@@ -299,15 +348,47 @@ cloudrobo dataset proc wait-task --task-id <id> [--timeout <seconds>] [--interva
 
 ---
 
-### restart-task
+### copy-task
 
 ```bash
-cloudrobo dataset proc restart-task --task-id <id>
+cloudrobo dataset proc copy-task --task-id <id> --name <new-name> [--task-config <json>] [--wait] [--timeout <seconds>] [--dry-run]
+```
+
+| 选项 | 必填 | 说明 |
+|------|------|------|
+| `--task-id` | 是 | 被复制的源任务ID |
+| `--name` | 是 | 新任务名称 |
+| `--task-config` | 否 | 其余可选覆盖字段 JSON，如 `{"description":"...","output_name":"..."}` |
+| `--wait` | 否 | 复制后等待任务完成 |
+| `--timeout` | 否 | 等待超时秒数，默认1800（配合 `--wait` 使用） |
+| `--dry-run` | 否 | 仅预览 |
+
+复制流程：先根据 `--task-id` 调用 `show-task` 获取源任务的配置信息，将其填充到复制请求体中，再用 `--name`（必填）及 `--task-config` 中的字段覆盖，最后发起复制请求。新任务创建成功后进入排队中（PENDING）状态。
+
+**示例**:
+```bash
+# 指定新任务名称复制
+cloudrobo dataset proc copy-task --task-id <task-id> --name copy-task
+
+# 指定新任务名称、覆盖部分字段并等待完成
+cloudrobo dataset proc copy-task --task-id <task-id> --name copy-task \
+  --task-config '{"description":"从原任务复制"}' --wait
+```
+
+---
+
+### get-frames
+
+```bash
+cloudrobo dataset proc get-frames --task-id <id> --prefix <prefix> [--max-keys <n>] [--next_marker <marker>]
 ```
 
 | 选项 | 必填 | 说明 |
 |------|------|------|
 | `--task-id` | 是 | 任务ID |
+| `--prefix` | 是 | 前缀，`show-task` 返回的 `target_path`（输出数据集）或 `dataset_configs.obs_path`（输入数据集）去除桶前缀后的值（如 `target_path` 为 `obs://bucket-0/cloudrobo/test/`，则 `prefix` 传 `cloudrobo/test/`） |
+| `--max-keys` | 否 | 每页返回最大数量（不超过50） |
+| `--next_marker` | 否 | 下一页查询标志（上次返回的 `next_marker` 值） |
 
 ---
 
@@ -337,13 +418,29 @@ cloudrobo dataset proc get-log --task-id <id> --file-name <name> --file-path <pa
 ### get-preview
 
 ```bash
-cloudrobo dataset proc get-preview --task-id <id> --file-name <file-path>
+cloudrobo dataset proc get-preview --task-id <id> --file-name <file-path> [--is-download]
 ```
 
 | 选项 | 必填 | 说明 |
 |------|------|------|
 | `--task-id` | 是 | 任务ID |
 | `--file-name` | 是 | 文件的OBS路径（去除桶名），如 `cloudrobo/.../file-000.parquet` |
+| `--is-download` | 否 | 生成下载链接（默认为预览链接） |
+
+---
+
+### download-log
+
+```bash
+cloudrobo dataset proc download-log --task-id <id> --file-name <name> --file-path <path> [--is-download]
+```
+
+| 选项 | 必填 | 说明 |
+|------|------|------|
+| `--task-id` | 是 | 任务ID |
+| `--file-name` | 是 | 日志文件名（通过 `get-log --is-system` 获取） |
+| `--file-path` | 是 | 日志文件路径（通过 `get-log --is-system` 获取） |
+| `--is-download` | 否 | 返回OBS临时下载链接（默认返回日志内容） |
 
 ---
 
@@ -360,3 +457,17 @@ cloudrobo dataset proc get-resource-usage --task-id <id> --metric <metric> --sta
 | `--start` | 是 | 起始时间戳（秒） |
 | `--end` | 是 | 结束时间戳（秒） |
 | `--step` | 是 | 采样间隔秒数（10-3600） |
+
+---
+
+### get-events
+
+```bash
+cloudrobo dataset proc get-events --task-id <id>
+```
+
+| 选项 | 必填 | 说明 |
+|------|------|------|
+| `--task-id` | 是 | 任务ID |
+
+返回任务运行过程中的事件列表，包含事件类型（NORMAL/WARNING）、首次/最后发生时间（Unix 时间戳）、事件描述（message/cn_reason）及发生次数。

@@ -141,7 +141,7 @@ def create_task(ctx, name, algo_type, task_config, workspace_id, wait_for_result
 @proc_group.command("list-tasks")
 @click.option("--status", default=None, help="状态过滤(RUNNING/SUCCEEDED/FAILED/PENDING)")
 @click.option("--name", default=None, help="按名称模糊查询")
-@click.option("--order-by", default=None, type=click.Choice(["start_at", "finish_at"]), help="排序指标")
+@click.option("--order-by", default=None, type=click.Choice(["start_at", "update_at", "finish_at", "create_at"]), help="排序指标")
 @click.option("--order", default=None, type=click.Choice(["DESC", "ASC"]), help="排序方式")
 @click.option("--offset", type=int, default=None, help="分页偏移量")
 @click.option("--limit", type=int, default=None, help="每页数量(1-100)")
@@ -188,15 +188,62 @@ def show_task(ctx, task_id):
     out(result)
 
 
-@proc_group.command("restart-task")
-@click.option("--task-id", required=True, help="任务ID")
+@proc_group.command("copy-task")
+@click.option("--task-id", required=True, help="被复制的源任务ID")
+@click.option("--name", required=True, help="新任务名称")
+@click.option("--task-config", default=None, help="其余可选覆盖字段(JSON)，如 {\"description\":\"...\",\"output_name\":\"...\"}")
+@click.option("--wait", "wait_for_result", is_flag=True, help="复制后等待任务完成")
+@click.option("--timeout", type=int, default=1800, help="等待超时秒数(配合--wait使用)")
+@click.option("--dry-run", is_flag=True)
 @click.pass_context
 @handle_dataset_error
-def restart_task(ctx, task_id):
-    """重启任务"""
+def copy_task(ctx, task_id, name, task_config, wait_for_result, timeout, dry_run):
+    """复制数据处理任务（先查询源任务信息，再基于其配置复制）"""
+    req = {}
+    if task_config:
+        try:
+            req = json.loads(task_config)
+        except json.JSONDecodeError as e:
+            raise click.BadParameter(f"Invalid JSON: {e}")
+    req["name"] = name
+    if not (1 <= len(name) <= 64):
+        raise click.BadParameter("name 长度必须为 1-64 个字符")
+    if not re.fullmatch(r'[\u4e00-\u9fa5a-zA-Z0-9_\-]+', name):
+        raise click.BadParameter("name 只能包含中文、数字、字母、下划线（_）、连字符（-）")
+
+    if dry_run:
+        click.echo(f"[DRY-RUN] copy_task(task_id={task_id}, req={req})")
+        return
+
     client = get_client(ctx, DatasetClient)
-    result = client.restart_task(task_id)
-    out(result)
+    result = client.copy_task(task_id, req)
+    payload = result.get("payload", result)
+    new_task_id = payload.get("id")
+    status = payload.get("status", "UNKNOWN")
+    click.echo(f"任务已复制: {new_task_id}, 状态: {status}")
+
+    if wait_for_result and new_task_id:
+        click.echo("等待任务完成...")
+        last_status = status
+
+        def on_status(new_status, detail):
+            nonlocal last_status
+            click.echo(f"  {last_status} → {new_status}")
+            last_status = new_status
+
+        result = client.wait_task(new_task_id, timeout=timeout, on_status=on_status)
+        click.echo(f"最终状态: {last_status}")
+        payload = result.get("payload", result)
+        if last_status == "SUCCEEDED":
+            click.echo(f"输出资产: {payload.get('target_asset_name', '')}")
+            click.echo(f"输出路径: {payload.get('target_path', '')}")
+            _print_task_logs(client, new_task_id, "system")
+        elif last_status == "FAILED":
+            if click.confirm("\n任务失败，是否查看日志？", default=True):
+                _print_task_logs(client, new_task_id, "system")
+                _print_task_logs(client, new_task_id, "job")
+    else:
+        out(result)
 
 
 @proc_group.command("delete-task")
@@ -235,12 +282,14 @@ def update_task(ctx, task_id, task_config):
 @proc_group.command("get-frames")
 @click.option("--task-id", required=True, help="任务ID")
 @click.option("--prefix", required=True, help="前缀，show-task接口返回的target_path（输出数据集）或者dataset_configs.obs_path（输入数据集）的值，再去除桶前缀，比如target_path: obs://bucket-0/cloudrobo/test/，则prefix传cloudrobo/test/")
+@click.option("--max-keys", type=int, default=None, help="每页返回最大数量(不超过50)")
+@click.option("--next_marker", default=None, help="下一页查询标志(上次返回的next_marker值)")
 @click.pass_context
 @handle_dataset_error
-def get_frames(ctx, task_id, prefix):
+def get_frames(ctx, task_id, prefix, max_keys, next_marker):
     """查看任务帧数据"""
     client = get_client(ctx, DatasetClient)
-    result = client.get_task_frames(task_id, prefix=prefix)
+    result = client.get_task_frames(task_id, prefix=prefix, max_keys=max_keys, next_marker=next_marker or "")
     out(result)
 
 
@@ -271,12 +320,13 @@ def get_log(ctx, task_id, file_name, file_path, is_system, show_all):
 @proc_group.command("get-preview")
 @click.option("--task-id", required=True, help="任务ID")
 @click.option("--file-name", required=True, help="文件名称，get-frames接口返回的prefix加上files，比如prefix是cloudrobo/，files是test.parquet，则file-name传cloudrobo/test.parquet")
+@click.option("--is-download", is_flag=True, help="生成下载链接(默认为预览链接)")
 @click.pass_context
 @handle_dataset_error
-def get_preview(ctx, task_id, file_name):
+def get_preview(ctx, task_id, file_name, is_download):
     """预览任务数据"""
     client = get_client(ctx, DatasetClient)
-    result = client.get_task_preview(task_id, file_name)
+    result = client.get_task_preview(task_id, file_name, is_download=is_download)
     out(result)
 
 
@@ -313,12 +363,13 @@ def wait_task(ctx, task_id, timeout, interval):
 @click.option("--task-id", required=True, help="任务ID")
 @click.option("--file-name", required=True, help="日志文件名(通过get-log --is-system获取)")
 @click.option("--file-path", required=True, help="日志文件路径(通过get-log --is-system获取)")
+@click.option("--is-download", is_flag=True, help="返回OBS临时下载链接(默认返回日志内容)")
 @click.pass_context
 @handle_dataset_error
-def download_log(ctx, task_id, file_name, file_path):
+def download_log(ctx, task_id, file_name, file_path, is_download):
     """下载任务日志文件"""
     client = get_client(ctx, DatasetClient)
-    result = client.download_task_log(task_id, file_name, file_path)
+    result = client.download_task_log(task_id, file_name, file_path, is_download=is_download)
     out(result)
 
 
@@ -332,10 +383,9 @@ def download_log(ctx, task_id, file_name, file_path):
 @click.option("--start", required=True, type=int, help="起始时间戳(秒)")
 @click.option("--end", required=True, type=int, help="结束时间戳(秒)")
 @click.option("--step", required=True, type=int, help="采样间隔秒数(10-3600)")
-@click.option("--pod-name", required=True, help="容器名，show-task接口返回的pod_names的值")
 @click.pass_context
 @handle_dataset_error
-def get_resource_usage(ctx, task_id, metric, start, end, step, pod_name):
+def get_resource_usage(ctx, task_id, metric, start, end, step):
     """获取任务资源监控数据(CPU/内存/网络/磁盘)"""
     _max_ts = 9999999999
     if not (0 <= start <= _max_ts):
@@ -345,7 +395,18 @@ def get_resource_usage(ctx, task_id, metric, start, end, step, pod_name):
     if start >= end:
         raise click.BadParameter("start 必须小于 end")
     client = get_client(ctx, DatasetClient)
-    result = client.get_task_resource_usage(task_id, metric, start, end, step, pod_name)
+    result = client.get_task_resource_usage(task_id, metric, start, end, step)
+    out(result)
+
+
+@proc_group.command("get-events")
+@click.option("--task-id", required=True, help="任务ID")
+@click.pass_context
+@handle_dataset_error
+def get_events(ctx, task_id):
+    """查询任务事件列表(正常/告警)"""
+    client = get_client(ctx, DatasetClient)
+    result = client.get_task_events(task_id)
     out(result)
 
 
@@ -447,16 +508,15 @@ def eval_create_task(ctx, name, task_config, workspace_id, wait_for_result, time
 @click.option("--status", default=None, help="状态过滤(逗号分隔)")
 @click.option("--workspace-id", default=None, help="工作空间ID")
 @click.option("--name", default=None, help="按名称模糊查询")
-@click.option("--algo-name", default=None, help="算法名称过滤")
-@click.option("--order-by", default=None, type=click.Choice(["start_at", "finish_at"]), help="排序指标")
+@click.option("--order-by", default=None, type=click.Choice(["start_at", "update_at", "finish_at", "create_at"]), help="排序指标")
 @click.option("--order", default=None, type=click.Choice(["DESC", "ASC"]), help="排序方式")
 @click.option("--offset", type=int, default=None, help="分页偏移量")
 @click.option("--limit", type=int, default=20, help="每页数量")
-@click.option("--user-id", default=None, help="创建者ID过滤")
+@click.option("--user-name", default=None, help="创建者名称过滤")
 @click.option("--dataset-name", default=None, help="数据集名称过滤")
 @click.pass_context
 @handle_dataset_error
-def eval_list_tasks(ctx, status, workspace_id, name, algo_name, order_by, order, offset, limit, user_id, dataset_name):
+def eval_list_tasks(ctx, status, workspace_id, name, order_by, order, offset, limit, user_name, dataset_name):
     """列出评测任务"""
     client = get_client(ctx, DatasetClient)
     params = {"limit": limit}
@@ -464,16 +524,14 @@ def eval_list_tasks(ctx, status, workspace_id, name, algo_name, order_by, order,
         params["statuses"] = status
     if name:
         params["name"] = name
-    if algo_name:
-        params["algo_names"] = algo_name
     if order_by:
         params["order_by"] = order_by
     if order:
         params["order"] = order
     if offset is not None:
         params["offset"] = offset
-    if user_id:
-        params["user_id"] = user_id
+    if user_name:
+        params["user_name"] = user_name
     if dataset_name:
         params["dataset_name"] = dataset_name
     result = client.list_eval_tasks(workspace_id=workspace_id, **params)
@@ -489,6 +547,63 @@ def eval_show_task(ctx, task_id):
     client = get_client(ctx, DatasetClient)
     result = client.get_eval_task_detail(task_id)
     out(result)
+
+
+@eval_group.command("copy-task")
+@click.option("--task-id", required=True, help="被复制的源评测任务ID")
+@click.option("--name", required=True, help="新任务名称")
+@click.option("--task-config", default=None, help="其余可选覆盖字段(JSON)，如 {\"description\":\"...\"}")
+@click.option("--wait", "wait_for_result", is_flag=True, help="复制后等待任务完成")
+@click.option("--timeout", type=int, default=1800, help="等待超时秒数(配合--wait使用)")
+@click.option("--dry-run", is_flag=True)
+@click.pass_context
+@handle_dataset_error
+def eval_copy_task(ctx, task_id, name, task_config, wait_for_result, timeout, dry_run):
+    """复制数据评测任务（先查询源任务信息，再基于其配置复制）"""
+    req = {}
+    if task_config:
+        try:
+            req = json.loads(task_config)
+        except json.JSONDecodeError as e:
+            raise click.BadParameter(f"Invalid JSON: {e}")
+    req["name"] = name
+    if not (1 <= len(name) <= 64):
+        raise click.BadParameter("name 长度必须为 1-64 个字符")
+    if not re.fullmatch(r'[\u4e00-\u9fa5a-zA-Z0-9_\-]+', name):
+        raise click.BadParameter("name 只能包含中文、数字、字母、下划线（_）、连字符（-）")
+
+    if dry_run:
+        click.echo(f"[DRY-RUN] copy_eval_task(task_id={task_id}, req={req})")
+        return
+
+    client = get_client(ctx, DatasetClient)
+    result = client.copy_eval_task(task_id, req)
+    payload = result.get("payload", result)
+    new_task_id = payload.get("id")
+    status = payload.get("status", "UNKNOWN")
+    click.echo(f"评测任务已复制: {new_task_id}, 状态: {status}")
+
+    if wait_for_result and new_task_id:
+        click.echo("等待任务完成...")
+        last_status = status
+
+        def on_status(new_status, detail):
+            nonlocal last_status
+            click.echo(f"  {last_status} → {new_status}")
+            last_status = new_status
+
+        result = client.wait_eval_task(new_task_id, timeout=timeout, on_status=on_status)
+        click.echo(f"最终状态: {last_status}")
+        payload = result.get("payload", result)
+        if last_status == "SUCCEEDED":
+            click.echo(f"评测报告路径: {payload.get('target_report_path', '')}")
+            _print_eval_task_logs(client, new_task_id, "system")
+        elif last_status == "FAILED":
+            if click.confirm("\n任务失败，是否查看日志？", default=True):
+                _print_eval_task_logs(client, new_task_id, "system")
+                _print_eval_task_logs(client, new_task_id, "job")
+    else:
+        out(result)
 
 
 @eval_group.command("update-task")
@@ -589,10 +704,22 @@ def eval_wait_task(ctx, task_id, timeout, interval):
 @click.option("--task-id", required=True, help="任务ID")
 @click.option("--file-name", required=True, help="日志文件名(通过get-log --is-system获取)")
 @click.option("--file-path", required=True, help="日志文件路径(通过get-log --is-system获取)")
+@click.option("--is-download", is_flag=True, help="返回OBS临时下载链接(默认返回日志内容)")
 @click.pass_context
 @handle_dataset_error
-def eval_download_log(ctx, task_id, file_name, file_path):
+def eval_download_log(ctx, task_id, file_name, file_path, is_download):
     """下载评测任务日志文件"""
     client = get_client(ctx, DatasetClient)
-    result = client.download_eval_task_log(task_id, file_name, file_path)
+    result = client.download_eval_task_log(task_id, file_name, file_path, is_download=is_download)
+    out(result)
+
+
+@eval_group.command("get-events")
+@click.option("--task-id", required=True, help="任务ID")
+@click.pass_context
+@handle_dataset_error
+def eval_get_events(ctx, task_id):
+    """查询评测任务事件列表(正常/告警)"""
+    client = get_client(ctx, DatasetClient)
+    result = client.get_eval_task_events(task_id)
     out(result)

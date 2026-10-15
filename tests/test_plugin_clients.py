@@ -85,11 +85,6 @@ class TestDatasetClient:
         result = self.client.list_tasks()
         assert "items" in result
 
-    def test_restart_task(self):
-        self.mock_http.post.return_value = {"status": "RUNNING"}
-        result = self.client.restart_task("task1")
-        assert result["status"] == "RUNNING"
-
     def test_get_task_log(self):
         self.mock_http.get.return_value = "log content"
         result = self.client.get_task_log("task1", "output.log")

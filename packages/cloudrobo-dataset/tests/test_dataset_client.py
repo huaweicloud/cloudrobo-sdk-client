@@ -53,10 +53,129 @@ class TestDatasetClient:
         result = self.client.list_tasks()
         assert "items" in result
 
-    def test_restart_task(self):
-        self.mock_http.post.return_value = {"status": "RUNNING"}
-        result = self.client.restart_task("task1")
-        assert result["status"] == "RUNNING"
+    def test_copy_task_fills_body_from_source_task(self):
+        self.mock_http.get.return_value = {
+            "payload": {
+                "id": "task1",
+                "status": "SUCCEEDED",
+                "name": "origin",
+                "workspace_id": "ws1",
+                "algo_asset_type": "PRESET_ASSETS",
+                "task_entrance": "bash entrypoint.sh",
+                "target_asset_type": "BUILD_IN_ASSET",
+                "target_asset_name": "old-output",
+                "worker_spec": {"cpu": 2, "memory": 4},
+            }
+        }
+        self.mock_http.post.return_value = {"payload": {"id": "task2", "status": "PENDING"}}
+        result = self.client.copy_task("task1", {"name": "copy-task"})
+        assert result["payload"]["id"] == "task2"
+
+        # 先调用 show-task 获取源任务详情
+        get_args, _ = self.mock_http.get.call_args
+        assert get_args[0].endswith("/v1/data-eng/proc-tasks/task1")
+
+        # 详情字段被映射填充进请求体，且以用户传入的 name 为准
+        post_args, post_kwargs = self.mock_http.post.call_args
+        assert post_args[0].endswith("/v1/data-eng/proc-tasks/task1/copy")
+        body = post_kwargs["json"]
+        assert body["name"] == "copy-task"
+        assert body["workspace_id"] == "ws1"
+        assert body["algo_type"] == "PRESET_ASSETS"
+        assert body["algo_entrance"] == "bash entrypoint.sh"
+        assert body["output_type"] == "BUILD_IN_ASSET"
+        assert body["output_name"] == "old-output"
+        assert body["worker_spec"] == {"cpu": 2, "memory": 4}
+        # 运行态字段不应带入请求体
+        assert "id" not in body
+        assert "status" not in body
+
+    def test_copy_task_user_config_overrides_source(self):
+        self.mock_http.get.return_value = {"payload": {"name": "origin", "target_asset_name": "old"}}
+        self.mock_http.post.return_value = {"payload": {"id": "task2"}}
+        self.client.copy_task("task1", {"name": "copy-task", "output_name": "new"})
+        _, post_kwargs = self.mock_http.post.call_args
+        assert post_kwargs["json"]["name"] == "copy-task"
+        assert post_kwargs["json"]["output_name"] == "new"
+
+    def test_copy_task_requires_name(self):
+        self.mock_http.get.return_value = {"payload": {"id": "task1"}}
+        with pytest.raises(DatasetError, match="name"):
+            self.client.copy_task("task1")
+        self.mock_http.post.assert_not_called()
+
+    def test_copy_eval_task_fills_body_from_source_task(self):
+        self.mock_http.get.return_value = {
+            "payload": {
+                "id": "task1",
+                "status": "SUCCEEDED",
+                "name": "origin-eval",
+                "workspace_id": "ws1",
+                "task_entrance": "bash entrypoint.sh",
+                "source_asset_type": "BUILD_IN_ASSET",
+                "source_asset_id": "ds1",
+                "source_asset_name": "dataset-a",
+                "source_asset_path": "obs://bucket/ds/",
+                "algo_id": "algo1",
+                "algo_name": "eval-algo",
+                "robot_config": "obs://bucket/rb/",
+                "worker_spec": {"cpu": 2, "memory": 4},
+            }
+        }
+        self.mock_http.post.return_value = {"payload": {"id": "task2", "status": "PENDING"}}
+        result = self.client.copy_eval_task("task1", {"name": "copy-eval"})
+        assert result["payload"]["id"] == "task2"
+
+        # 先调用 eval show-task 获取源任务详情
+        get_args, _ = self.mock_http.get.call_args
+        assert get_args[0].endswith("/v1/data-eng/eval-tasks/task1")
+
+        # 详情字段被映射填充进请求体，且以用户传入的 name 为准
+        post_args, post_kwargs = self.mock_http.post.call_args
+        assert post_args[0].endswith("/v1/data-eng/eval-tasks/task1/copy")
+        body = post_kwargs["json"]
+        assert body["name"] == "copy-eval"
+        assert body["workspace_id"] == "ws1"
+        assert body["algo_id"] == "algo1"
+        assert body["algo_name"] == "eval-algo"
+        assert body["algo_entrance"] == "bash entrypoint.sh"
+        assert body["dataset_type"] == "BUILD_IN_ASSET"
+        assert body["dataset_id"] == "ds1"
+        assert body["dataset_name"] == "dataset-a"
+        assert body["dataset_path"] == "obs://bucket/ds/"
+        assert body["robot_config"] == "obs://bucket/rb/"
+        assert body["worker_spec"] == {"cpu": 2, "memory": 4}
+        # 运行态字段不应带入请求体
+        assert "id" not in body
+        assert "status" not in body
+
+    def test_copy_eval_task_user_config_overrides_source(self):
+        self.mock_http.get.return_value = {"payload": {"name": "origin", "source_asset_name": "old"}}
+        self.mock_http.post.return_value = {"payload": {"id": "task2"}}
+        self.client.copy_eval_task("task1", {"name": "copy-eval", "dataset_name": "new"})
+        _, post_kwargs = self.mock_http.post.call_args
+        assert post_kwargs["json"]["name"] == "copy-eval"
+        assert post_kwargs["json"]["dataset_name"] == "new"
+
+    def test_copy_eval_task_requires_name(self):
+        self.mock_http.get.return_value = {"payload": {"id": "task1"}}
+        with pytest.raises(DatasetError, match="name"):
+            self.client.copy_eval_task("task1")
+        self.mock_http.post.assert_not_called()
+
+    def test_get_task_events(self):
+        self.mock_http.get.return_value = {"payload": {"events": []}}
+        result = self.client.get_task_events("task1")
+        assert result["payload"]["events"] == []
+        get_args, _ = self.mock_http.get.call_args
+        assert get_args[0].endswith("/v1/data-eng/proc-tasks/task1/events")
+
+    def test_get_eval_task_events(self):
+        self.mock_http.get.return_value = {"payload": {"events": []}}
+        result = self.client.get_eval_task_events("task1")
+        assert result["payload"]["events"] == []
+        get_args, _ = self.mock_http.get.call_args
+        assert get_args[0].endswith("/v1/data-eng/eval-tasks/task1/events")
 
     def test_get_task_log(self):
         self.mock_http.get.return_value = "log content"
