@@ -231,12 +231,12 @@ class DatasetClient(BaseClient):
         """复制数据处理任务
 
         先调用 show-task（get_task_detail）获取源任务信息并填充到复制请求体，
-        再以 req 中的字段覆盖（name 必填），最后发起复制请求。
+        再以 req 中的字段覆盖（name、output_name 必填），最后发起复制请求。
         新任务创建成功后进入排队中（PENDING）状态。
 
         Args:
             task_id: 被复制的源任务ID（UUID格式）
-            req: 覆盖字段，必须包含新的任务名称 name，其余 body 参数可选
+            req: 覆盖字段，必须包含新的任务名称 name 和输出数据集名称 output_name
 
         Returns:
             任务详情响应（ProcTaskDetailResponse），payload.id 为新任务ID
@@ -251,6 +251,12 @@ class DatasetClient(BaseClient):
             raise DatasetError(
                 "复制任务失败: 缺少新任务名称 name",
                 "请通过 --name 指定新任务名称",
+            )
+
+        if not base_req.get("output_name"):
+            raise DatasetError(
+                "复制任务失败: 缺少输出数据集名称 output_name",
+                "请通过 --output-name 指定输出数据集名称",
             )
 
         return self._client.post(
@@ -352,15 +358,16 @@ class DatasetClient(BaseClient):
             params={"metric": metric, "start": start, "end": end, "step": step}
         )
 
-    def get_task_events(self, task_id: str) -> Dict:
+    def get_task_events(self, task_id: str, job_name: str) -> Dict:
         """查询数据处理任务事件列表
 
         返回任务运行过程中的事件（正常/告警）、首次/最后发生时间、描述及次数。
 
         Args:
             task_id: 任务ID
+            job_name: 事件所属job名称
         """
-        return self._client.get(self._url(f"/v1/data-eng/proc-tasks/{task_id}/events"))
+        return self._client.get(self._url(f"/v1/data-eng/proc-tasks/{task_id}/events"), params={"job_name": job_name})
 
     def download_task_log(self, task_id: str, file_name: str, file_path: str,
                           is_download: bool = False) -> Any:
@@ -508,15 +515,16 @@ class DatasetClient(BaseClient):
             params={"file_path": file_path, "is_download": is_download}
         )
 
-    def get_eval_task_events(self, task_id: str) -> Dict:
+    def get_eval_task_events(self, task_id: str, job_name: str) -> Dict:
         """查询数据评测任务事件列表
 
         返回任务运行过程中的事件（正常/告警）、首次/最后发生时间、描述及次数。
 
         Args:
             task_id: 评测任务ID
+            job_name: 事件所属job名称
         """
-        return self._client.get(self._url(f"/v1/data-eng/eval-tasks/{task_id}/events"))
+        return self._client.get(self._url(f"/v1/data-eng/eval-tasks/{task_id}/events"), params={"job_name": job_name})
 
     TERMINAL_STATES = {"SUCCEEDED", "FAILED", "DELETED"}
 

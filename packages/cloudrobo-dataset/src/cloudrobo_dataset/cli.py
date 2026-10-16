@@ -191,13 +191,14 @@ def show_task(ctx, task_id):
 @proc_group.command("copy-task")
 @click.option("--task-id", required=True, help="被复制的源任务ID")
 @click.option("--name", required=True, help="新任务名称")
-@click.option("--task-config", default=None, help="其余可选覆盖字段(JSON)，如 {\"description\":\"...\",\"output_name\":\"...\"}")
+@click.option("--output-name", required=True, help="新输出数据集名称")
+@click.option("--task-config", default=None, help="其余可选覆盖字段(JSON)，如 {\"description\":\"...\"}")
 @click.option("--wait", "wait_for_result", is_flag=True, help="复制后等待任务完成")
 @click.option("--timeout", type=int, default=1800, help="等待超时秒数(配合--wait使用)")
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
 @handle_dataset_error
-def copy_task(ctx, task_id, name, task_config, wait_for_result, timeout, dry_run):
+def copy_task(ctx, task_id, name, output_name, task_config, wait_for_result, timeout, dry_run):
     """复制数据处理任务（先查询源任务信息，再基于其配置复制）"""
     req = {}
     if task_config:
@@ -206,6 +207,7 @@ def copy_task(ctx, task_id, name, task_config, wait_for_result, timeout, dry_run
         except json.JSONDecodeError as e:
             raise click.BadParameter(f"Invalid JSON: {e}")
     req["name"] = name
+    req["output_name"] = output_name
     if not (1 <= len(name) <= 64):
         raise click.BadParameter("name 长度必须为 1-64 个字符")
     if not re.fullmatch(r'[\u4e00-\u9fa5a-zA-Z0-9_\-]+', name):
@@ -401,12 +403,13 @@ def get_resource_usage(ctx, task_id, metric, start, end, step):
 
 @proc_group.command("get-events")
 @click.option("--task-id", required=True, help="任务ID")
+@click.option("--job-name", required=True, help="事件所属job名称")
 @click.pass_context
 @handle_dataset_error
-def get_events(ctx, task_id):
+def get_events(ctx, task_id, job_name):
     """查询任务事件列表(正常/告警)"""
     client = get_client(ctx, DatasetClient)
-    result = client.get_task_events(task_id)
+    result = client.get_task_events(task_id, job_name)
     out(result)
 
 
@@ -716,10 +719,11 @@ def eval_download_log(ctx, task_id, file_name, file_path, is_download):
 
 @eval_group.command("get-events")
 @click.option("--task-id", required=True, help="任务ID")
+@click.option("--job-name", required=True, help="事件所属job名称")
 @click.pass_context
 @handle_dataset_error
-def eval_get_events(ctx, task_id):
+def eval_get_events(ctx, task_id, job_name):
     """查询评测任务事件列表(正常/告警)"""
     client = get_client(ctx, DatasetClient)
-    result = client.get_eval_task_events(task_id)
+    result = client.get_eval_task_events(task_id, job_name)
     out(result)

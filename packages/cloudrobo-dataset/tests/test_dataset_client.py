@@ -104,6 +104,12 @@ class TestDatasetClient:
             self.client.copy_task("task1")
         self.mock_http.post.assert_not_called()
 
+    def test_copy_task_requires_output_name(self):
+        self.mock_http.get.return_value = {"payload": {"name": "origin"}}
+        with pytest.raises(DatasetError, match="output_name"):
+            self.client.copy_task("task1", {"name", "copy-task"})
+        self.mock_http.post.assert_not_called()
+
     def test_copy_eval_task_fills_body_from_source_task(self):
         self.mock_http.get.return_value = {
             "payload": {
