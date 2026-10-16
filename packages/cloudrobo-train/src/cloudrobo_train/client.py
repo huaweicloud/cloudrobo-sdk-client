@@ -33,8 +33,6 @@ _INPUT_MODEL_SUBMIT_FIELDS = {
 
 _TRAIN_REQUIRED_FIELDS = {"algorithm", "name", "spec", "train_mode", "workspace_id"}
 _SIM_RL_REQUIRED_FIELDS = {"name", "workspace_id", "config_mode", "spec", "input_models", "output_models"}
-_DRAFT_TRAIN_REQUIRED_FIELDS = {"name", "workspace_id"}
-_DRAFT_SIM_RL_REQUIRED_FIELDS = {"name", "workspace_id"}
 
 
 def _validate_required_fields(config: Dict, required_fields: set, task_type: str):
@@ -217,7 +215,7 @@ class TrainClient(BaseClient):
 
     def save_draft(self, req: Dict, workspace_id: Optional[str] = None) -> Dict:
         req.setdefault("workspace_id", self._resolve_workspace_id(workspace_id))
-        _validate_required_fields(req, _DRAFT_TRAIN_REQUIRED_FIELDS, "训练任务草稿")
+        _validate_required_fields(req, _TRAIN_REQUIRED_FIELDS, "训练任务草稿")
         return _unwrap_payload(self._client.post(self._url(f"{self._TASKS}/draft"), json=req), item=True)
 
     def update_train_task(self, task_id: str, req: Dict) -> Dict:
@@ -276,7 +274,7 @@ class TrainClient(BaseClient):
 
     def create_sim_rl_task_draft(self, req: Dict, workspace_id: Optional[str] = None) -> Dict:
         req.setdefault("workspace_id", self._resolve_workspace_id(workspace_id))
-        _validate_required_fields(req, _DRAFT_SIM_RL_REQUIRED_FIELDS, "仿真强化学习任务草稿")
+        _validate_required_fields(req, _SIM_RL_REQUIRED_FIELDS, "仿真强化学习任务草稿")
         return _unwrap_payload(self._client.post(self._url(f"{self._SIM}/draft"), json=req), item=True)
 
     def show_sim_rl_task(self, task_id: str) -> Dict:
