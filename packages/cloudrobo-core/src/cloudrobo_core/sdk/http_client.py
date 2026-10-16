@@ -68,6 +68,14 @@ def _log_response(method: str, url: str, resp: requests.Response) -> None:
     traffic_logger.info("RESPONSE %s %s %d | %s", method, url, resp.status_code, json.dumps(log_data, ensure_ascii=False, default=str))
 
 
+def _format_error_detail(err: Any, fallback: str) -> str:
+    detail = err.error_msg or fallback
+    if err.error_context is not None:
+        context = json.dumps(err.error_context, ensure_ascii=False, default=str)
+        detail = f"{detail}; error_context: {context}" if detail else f"error_context: {context}"
+    return detail
+
+
 def _patch_ssl_context():
     import ssl
     _orig_load_default_certs = ssl.SSLContext.load_default_certs
@@ -356,15 +364,17 @@ class HttpClient:
             except ValueError:
                 return resp.text
         if code == 401:
-            raise AuthenticationError(f"Unauthorized: {resp.text}")
+            err = self._parse_error(resp)
+            detail = _format_error_detail(err, resp.text)
+            raise AuthenticationError(f"Unauthorized: {detail}")
         if code == 404:
-            from cloudrobo_core.models import ErrorResponse
             err = self._parse_error(resp)
-            raise ResourceNotFoundError(err.error_msg or f"Not found: {resp.text}")
+            detail = _format_error_detail(err, f"Not found: {resp.text}")
+            raise ResourceNotFoundError(detail)
         if code == 409:
-            from cloudrobo_core.models import ErrorResponse
             err = self._parse_error(resp)
-            raise ResourceConflictError(err.error_msg or f"Conflict: {resp.text}")
+            detail = _format_error_detail(err, f"Conflict: {resp.text}")
+            raise ResourceConflictError(detail)
         if code == 429:
             retry_after = resp.headers.get("Retry-After")
             if retry_after:
@@ -372,15 +382,17 @@ class HttpClient:
                     retry_after = float(retry_after)
                 except (ValueError, TypeError):
                     retry_after = None
-            raise RateLimitError(retry_after=retry_after)
+            err = self._parse_error(resp)
+            detail = _format_error_detail(err, "Rate limited")
+            raise RateLimitError(detail, retry_after=retry_after)
         if code >= 500:
             err = self._parse_error(resp)
-            detail = err.error_msg or resp.text[:200]
+            detail = _format_error_detail(err, resp.text[:200])
             error_msg = f"Server error {code}: {detail}"
             logger.debug("Error details", exc_info=True)
             raise ServiceError(error_msg, status_code=code)
         err = self._parse_error(resp)
-        detail = err.error_msg or resp.text[:200]
+        detail = _format_error_detail(err, resp.text[:200])
         error_msg = f"Request failed ({code}): {detail}"
         logger.debug("Error details", exc_info=True)
         raise ServiceError(error_msg, status_code=code)
@@ -392,6 +404,7 @@ class HttpClient:
             return ErrorResponse(
                 error_code=data.get("error_code", ""),
                 error_msg=data.get("error_msg", ""),
+                error_context=data.get("error_context"),
             )
         except ValueError:
             return ErrorResponse()
