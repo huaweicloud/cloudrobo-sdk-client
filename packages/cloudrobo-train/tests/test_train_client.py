@@ -28,7 +28,13 @@ class TestTrainClient:
         result = self.client.create_train_task(req)
         assert result == {"task_id": "train1"}
         self.mock_http.post.assert_called_with(
-            f"{BASE}/v1/training/train-tasks", json={**req, "workspace_id": "ws-test"}
+            f"{BASE}/v1/training/train-tasks",
+            json={
+                **req,
+                "workspace_id": "ws-test",
+                "checkpoint_max_keep": 10,
+                "output_retention_days": 14,
+            },
         )
 
     def test_list_train_tasks(self):
@@ -96,6 +102,8 @@ class TestTrainClient:
                 "train_mode": "MODEL_TUNING",
                 "train_method": "FFT",
                 "workspace_id": "ws-test",
+                "checkpoint_max_keep": 10,
+                "output_retention_days": 14,
             },
         )
 
@@ -112,7 +120,12 @@ class TestTrainClient:
             "status": "FINISHED",
         }
         self.mock_http.post.return_value = {"payload": {"item": {"task_id": "t1"}}}
-        user_req = {"description": "updated", "spec": "Ascend: 2 * SNT9B2"}
+        user_req = {
+            "description": "updated",
+            "spec": "Ascend: 2 * SNT9B2",
+            "checkpoint_max_keep": 25,
+            "output_retention_days": 30,
+        }
         result = self.client.restart_train_task("t1", req=user_req)
         assert result == {"task_id": "t1"}
         call_args = self.mock_http.post.call_args
@@ -121,6 +134,8 @@ class TestTrainClient:
         assert posted_req["spec"] == "Ascend: 2 * SNT9B2"
         assert posted_req["name"] == "Train-job"
         assert posted_req["workspace_id"] == "ws-test"
+        assert posted_req["checkpoint_max_keep"] == 25
+        assert posted_req["output_retention_days"] == 30
 
     def test_save_draft(self):
         self.mock_http.post.return_value = {"payload": {"item": {"task_id": "draft1"}}}
@@ -133,7 +148,13 @@ class TestTrainClient:
         result = self.client.save_draft(req)
         assert result == {"task_id": "draft1"}
         self.mock_http.post.assert_called_with(
-            f"{BASE}/v1/training/train-tasks/draft", json={**req, "workspace_id": "ws-test"}
+            f"{BASE}/v1/training/train-tasks/draft",
+            json={
+                **req,
+                "workspace_id": "ws-test",
+                "checkpoint_max_keep": 10,
+                "output_retention_days": 14,
+            },
         )
 
     def test_update_train_task(self):

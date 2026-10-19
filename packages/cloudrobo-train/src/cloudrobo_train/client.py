@@ -33,6 +33,10 @@ _INPUT_MODEL_SUBMIT_FIELDS = {
 
 _TRAIN_REQUIRED_FIELDS = {"algorithm", "name", "spec", "train_mode", "workspace_id"}
 _SIM_RL_REQUIRED_FIELDS = {"name", "workspace_id", "config_mode", "spec", "input_models", "output_models"}
+_TRAIN_TASK_DEFAULTS = {
+    "checkpoint_max_keep": 10,
+    "output_retention_days": 14,
+}
 
 
 def _validate_required_fields(config: Dict, required_fields: set, task_type: str):
@@ -43,6 +47,11 @@ def _validate_required_fields(config: Dict, required_fields: set, task_type: str
             f"{task_type}缺少必要字段: {', '.join(sorted(missing))}。"
             f"请通过 --config 或 --config-file 补充缺失字段。"
         )
+
+
+def _set_train_task_defaults(config: Dict) -> None:
+    for field, value in _TRAIN_TASK_DEFAULTS.items():
+        config.setdefault(field, value)
 
 
 def _extract_dto(task_detail: Dict, dto_fields: set) -> Dict:
@@ -172,6 +181,7 @@ class TrainClient(BaseClient):
 
     def create_train_task(self, req: Dict, workspace_id: Optional[str] = None) -> Dict:
         req.setdefault("workspace_id", self._resolve_workspace_id(workspace_id))
+        _set_train_task_defaults(req)
         _validate_required_fields(req, _TRAIN_REQUIRED_FIELDS, "训练任务")
         return _unwrap_payload(self._client.post(self._url(self._TASKS), json=req), item=True)
 
@@ -209,12 +219,14 @@ class TrainClient(BaseClient):
         base_req["workspace_id"] = self._resolve_workspace_id(workspace_id)
         _serialize_string_typed_json_fields(base_req)
         _clean_models(base_req, self._client)
+        _set_train_task_defaults(base_req)
         _validate_required_fields(base_req, _TRAIN_REQUIRED_FIELDS, "训练任务重训")
         return _unwrap_payload(self._client.post(self._url(f"{self._TASKS}/{task_id}/restart"), json=base_req),
                                item=True)
 
     def save_draft(self, req: Dict, workspace_id: Optional[str] = None) -> Dict:
         req.setdefault("workspace_id", self._resolve_workspace_id(workspace_id))
+        _set_train_task_defaults(req)
         _validate_required_fields(req, _TRAIN_REQUIRED_FIELDS, "训练任务草稿")
         return _unwrap_payload(self._client.post(self._url(f"{self._TASKS}/draft"), json=req), item=True)
 
