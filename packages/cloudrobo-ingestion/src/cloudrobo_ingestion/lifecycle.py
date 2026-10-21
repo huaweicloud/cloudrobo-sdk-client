@@ -117,7 +117,17 @@ def status():
         info = make_error("local", "control", exc, context=dict(path=str(root / "instance.lock")))
         return dict(running=False, state="unknown", error=summary(info), error_info=info)
     try:
-        value = json.loads((root / "status.json").read_text(encoding="utf-8"))
+        for attempt in range(5):
+            try:
+                value = json.loads((root / "status.json").read_text(encoding="utf-8"))
+                break
+            except PermissionError:
+                # Windows can briefly deny opening the old status file while
+                # the daemon atomically replaces it. Keep persistent failures
+                # visible, but do not discard state for a transient collision.
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
     except FileNotFoundError:
         value = {}
     except (OSError, ValueError) as exc:

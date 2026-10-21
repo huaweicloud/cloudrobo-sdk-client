@@ -340,7 +340,7 @@ def test_status_write_failure_preserves_primary_disk_error(config, monkeypatch):
     monkeypatch.setattr(daemon, "write_json", write)
     with pytest.raises(DiagnosticError) as caught:
         supervisor.run()
-    state = json.loads((config.work_dir / "status.json").read_text())
+    state = json.loads((config.work_dir / "status.json").read_text(encoding="utf-8"))
     assert state["state"] == "failed"
     assert state["error_info"]["code"] == "LOCAL_DISK_FULL"
     assert state["error_info"]["stage"] == "status"

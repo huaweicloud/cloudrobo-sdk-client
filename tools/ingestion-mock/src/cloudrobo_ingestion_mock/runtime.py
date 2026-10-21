@@ -34,7 +34,7 @@ class MockRunner:
         self.stop_event = threading.Event()
         self.wait = wait or self.stop_event.wait
         self.emit = emit or (
-            lambda event: print(json.dumps(event, ensure_ascii=False, allow_nan=False), flush=True)
+            lambda event: print(json.dumps(event, ensure_ascii=True, allow_nan=False), flush=True)
         )
         self.scenarios = Scenarios(source, self.clock, file_count, time_scale)
         self.publish_timeout = publish_timeout

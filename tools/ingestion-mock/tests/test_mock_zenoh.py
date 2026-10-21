@@ -5,7 +5,8 @@ from cloudrobo_ingestion.progress import message_class
 
 
 @pytest.mark.parametrize("scenario", ["duplicate", "out-of-order", "malformed"])
-def test_foreground_module_to_local_zenoh(scenario, tmp_path, monkeypatch):
+@pytest.mark.parametrize("io_encoding", ["utf-8", "cp1252"])
+def test_foreground_module_to_local_zenoh(scenario, io_encoding, tmp_path, monkeypatch):
     import json
     import subprocess
     import sys
@@ -33,6 +34,8 @@ def test_foreground_module_to_local_zenoh(scenario, tmp_path, monkeypatch):
     monkeypatch.setenv("CLOUDROBO_INGESTION_RUNTIME_DIR", str(runtime))
     monkeypatch.delenv("HUAWEI_CLOUD_AK", raising=False)
     monkeypatch.delenv("HUAWEI_CLOUD_SK", raising=False)
+    # Exercise redirected Windows stdout even on UTF-8 Linux/macOS runners.
+    monkeypatch.setenv("PYTHONIOENCODING", io_encoding)
     output = tmp_path / "events.jsonl"
     try:
         result = subprocess.run(
@@ -53,7 +56,7 @@ def test_foreground_module_to_local_zenoh(scenario, tmp_path, monkeypatch):
             timeout=15,
         )
         assert result.returncode == 0, result.stderr
-        events = [json.loads(line) for line in output.read_text().splitlines()]
+        events = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
         sends = [e for e in events if e["event"] == "local_published"]
         deadline = time.monotonic() + 2
         while len(received) < len(sends) and time.monotonic() < deadline:

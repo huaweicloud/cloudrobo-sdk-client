@@ -15,6 +15,8 @@ python -m cloudrobo_ingestion_mock --scenario functional-suite --output results.
 默认单轮 `overview`，Ctrl+C 停止（退出码 130）。不依赖 OBS 凭证、不扫描客户目录、
 不创建副本、SQLite、checkpoint、工作目录或后台实例状态；可以与真实回流进程并行运行。
 终端持续输出 JSON 事件，只有显式 `--output` 才写文件，该文件会覆盖现有内容。
+终端 JSON 使用 Unicode 转义，兼容 Windows 非 UTF-8 输出编码；JSONL 文件使用 UTF-8，
+直接保留中文。两种输出经 JSON 解析后内容一致。
 所有模拟状态仅存内存，重启生成新身份。无环境变量隐式切换开关。
 
 ## 连接与参数

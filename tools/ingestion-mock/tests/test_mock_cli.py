@@ -70,7 +70,7 @@ def test_cli_writes_jsonl_and_uses_overrides(tmp_path, monkeypatch):
             self.emit = kwargs["emit"]
 
         def run(self):
-            self.emit(dict(event="run_complete", messages=4))
+            self.emit(dict(event="run_complete", messages=4, description="超市取货／遥操接管🤖"))
 
     monkeypatch.setattr(mock, "MockRunner", Runner)
     output = tmp_path / "results.jsonl"
@@ -93,10 +93,13 @@ def test_cli_writes_jsonl_and_uses_overrides(tmp_path, monkeypatch):
     reporter, source, options = received[0]
     assert source == "test/device" and options["repeat"] == 1
     assert reporter.topic == "test/device/data_ingestion/upload_status"
-    events = [json.loads(line) for line in output.read_text().splitlines()]
+    events = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
     assert events[0]["endpoints"] == ["tcp/127.0.0.1:9999"]
     assert events[-1]["event"] == "run_complete"
-    assert result.output.splitlines() == output.read_text().splitlines()
+    assert events[-1]["description"] == "超市取货／遥操接管🤖"
+    assert "超市取货" in output.read_text(encoding="utf-8")
+    assert result.output.isascii()
+    assert [json.loads(line) for line in result.output.splitlines()] == events
 
 
 @pytest.mark.parametrize("exception,code", [(KeyboardInterrupt, 130), (TimeoutError, 1)])

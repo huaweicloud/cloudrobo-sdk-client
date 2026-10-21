@@ -24,6 +24,14 @@ class Clock:
         self.now += seconds
 
 
+def test_default_event_output_preserves_unicode_with_ascii_json(capsys):
+    runner = MockRunner(None, "r2c/local")
+    runner.event("step", description="超市取货／遥操接管🤖")
+    output = capsys.readouterr().out
+    assert output.isascii()
+    assert json.loads(output)["description"] == "超市取货／遥操接管🤖"
+
+
 class AckReporter:
     topic = "r2c/local/data_ingestion/upload_status"
 

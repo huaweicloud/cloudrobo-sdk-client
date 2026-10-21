@@ -133,10 +133,12 @@ def main(
             stream = output.open("w", encoding="utf-8")
 
         def emit(event):
-            text = json.dumps(event, ensure_ascii=False, allow_nan=False)
-            click.echo(text)
+            # Redirected Windows stdout may use a legacy code page. JSON
+            # escapes preserve every Unicode value without changing the
+            # terminal encoding; the optional file remains readable UTF-8.
+            click.echo(json.dumps(event, ensure_ascii=True, allow_nan=False))
             if stream:
-                stream.write(text + "\n")
+                stream.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
                 stream.flush()
 
         emit(
