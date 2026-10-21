@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import errno
 import json
 import logging
 import multiprocessing
@@ -43,6 +44,7 @@ class Supervisor:
         self.progress = {}
         self.stop_event = threading.Event()
         self.process = self.pipe = None
+        self.pipe_eof = False
         self.active = self.result = None
         self.cleanup_only = False
         self.last_error = ""
@@ -241,6 +243,7 @@ class Supervisor:
     def _launch(self, batch, entries, cleanup_only=False):
         parent, child = self.context.Pipe()
         self.active, self.result, self.cleanup_only = batch["id"], None, cleanup_only
+        self.pipe_eof = False
         self.pipe = parent
         self.process = self.context.Process(
             target=self.worker_target,
@@ -257,7 +260,7 @@ class Supervisor:
             child.close()
 
     def _drain_worker_events(self):
-        if self.pipe:
+        if self.pipe and not self.pipe_eof:
             try:
                 while self.pipe.poll():
                     event = self.pipe.recv()
@@ -285,6 +288,14 @@ class Supervisor:
                         self.result = event
                         if event.get("state") in ("failed", "rejected"):
                             self.fail_progress(self.active)
+                            if not self.cleanup_only:
+                                info = event.get("error_info")
+                                self.store.update(
+                                    self.active,
+                                    state=event["state"],
+                                    error=summary(info) if info else event.get("error", ""),
+                                    error_info=info,
+                                )
                     elif kind == "cleanup_error":
                         self.batch_error(
                             self.store.get(self.active),
@@ -293,11 +304,29 @@ class Supervisor:
                             cleanup_pending=1,
                         )
             except EOFError:
-                pass
+                self._worker_pipe_closed()
             except OSError as exc:
+                # Windows poll()/recv() may report peer closure as WinError 109
+                # rather than EOFError. POSIX can use EPIPE/ECONNRESET instead.
+                # Stop reading once closed; draining it again during shutdown
+                # would mask the worker result and prevent final status writes.
+                if getattr(exc, "winerror", None) in (109, 232, 233) or exc.errno in (
+                    errno.EPIPE,
+                    errno.ECONNRESET,
+                ):
+                    self._worker_pipe_closed()
+                    return
+                self.pipe_eof = True
                 raise DiagnosticError(
                     make_error("local", "ipc", exc, context=dict(batch_id=self.active))
                 ) from exc
+
+    def _worker_pipe_closed(self):
+        self.pipe_eof = True
+        if self.result is None:
+            # A worker that vanished without a result must not leave its last
+            # uploading snapshot visible while we wait to reap the process.
+            self.fail_progress(self.active)
 
     def drain(self):
         self._drain_worker_events()
