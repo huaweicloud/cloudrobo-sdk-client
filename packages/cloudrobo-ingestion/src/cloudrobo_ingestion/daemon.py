@@ -24,10 +24,11 @@ import yaml
 
 from .config import IngestionConfig
 from .diagnostics import DiagnosticError, ErrorTracker, log_error, make_error, summary
-from .filesystem import RejectedBatch, discover, manifest, remove_staging
+from .filesystem import RejectedBatch, remove_staging
 from .lifecycle import InstanceLock, private_dir, runtime_dir, write_json
 from .progress import BatchProgress, DisabledReporter, Reporter, message_class, serialize_snapshot
-from .store import BatchStore, now_ms
+from .scanner import MANIFEST_WINDOW, SCAN_QUEUE_SIZE, ScanWorker
+from .store import DEFERRED_REPORT_TTL_MS, BatchStore, now_ms
 from .worker import run_worker
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,19 @@ class Supervisor:
         self.final_errors = {}
         self.next_final_retry = 0.0
         self.context = multiprocessing.get_context("spawn")
+        self.scanner = ScanWorker(config.source_dir, config.max_files_per_batch, self.store.paths())
+        self.store.on_close = self.scanner.close
+        self.running = False
+        self.source_available = False
+        self.preparing = {}
+        self.launch_ready = None
+        self.outbox_id = self.outbox_cursor = None
+        self.scan_rounds = 0
+        self.scan_status = dict(state="idle", last_completed_ms=0, checked_dirs=0)
+        self.scan_errors = collections.OrderedDict()
+        self.scan_error_paths = set()
+        self.scan_logs = {}
+        self.root_errors = ErrorTracker(logger)
 
     def batch_error(self, batch, info, *, cleanup=False, **updates):
         if cleanup:
@@ -92,6 +106,13 @@ class Supervisor:
                     batch_path=batch["path"],
                     source_dir=str(self.config.source_dir),
                 ),
+                hint=(
+                    "该批次已被拒绝，本次运行不再处理。请手动解决上述扫描问题，然后重启数据回流工具。"
+                    if stage == "scan" and isinstance(exc, RejectedBatch)
+                    else "请检查目录及权限，工具会继续尝试。"
+                    if stage == "scan"
+                    else None
+                ),
             ),
             **updates,
         )
@@ -118,18 +139,19 @@ class Supervisor:
             return False
 
     def initialize(self):
-        for batch in self.store.rows():
-            self.cleanup(batch)
-            if self.config.reports and batch["final_snapshot"] is not None:
-                self.queue_final(batch)
-            elif self.config.reports and batch["pending"] is not None:
-                self.reporter.set(batch["id"], batch["pending"], terminal=batch["state"] == "done")
+        self.expire_reports()
+        self._fill_outbox()
 
     def queue_final(self, batch):
         """Materialize the durable final result only when reporting is enabled."""
         if not self.config.reports:
             return
+        if batch["report_expires_ms"] and now_ms() >= batch["report_expires_ms"]:
+            self.expire_reports()
+            return
         batch_id = batch["id"]
+        if self.outbox_id not in (None, batch_id):
+            return
         try:
             payload = batch["pending"]
             if payload is None:
@@ -139,6 +161,8 @@ class Supervisor:
         except Exception as exc:
             if isinstance(exc, sqlite3.Error):
                 raise
+            if len(self.final_errors) >= 50 and batch_id not in self.final_errors:
+                self.final_errors.pop(next(iter(self.final_errors)))
             self.final_errors.setdefault(batch_id, ErrorTracker(logger)).failed(
                 make_error("local", "serialize", exc, context=dict(batch_id=batch_id))
             )
@@ -146,39 +170,219 @@ class Supervisor:
         tracker = self.final_errors.pop(batch_id, None)
         if tracker:
             tracker.recovered()
-        self.reporter.set(batch_id, payload, terminal=True)
+        self.reporter.set(
+            batch_id, payload, terminal=True, expires_at_ms=batch["report_expires_ms"]
+        )
+        self.outbox_id = batch_id
 
-    def scan(self):
-        for source in discover(self.config.source_dir):
-            if self.stop_event.is_set():
+    def _fill_outbox(self):
+        if not self.config.reports:
+            return
+        if self.outbox_id is not None and self.reporter.contains(self.outbox_id):
+            return
+        self.outbox_id = None
+        excluded = set(self.progress) | set(self.preparing)
+        batch = self.store.outbox_next(excluded, self.outbox_cursor)
+        if batch is None and self.outbox_cursor is not None:
+            self.outbox_cursor = None
+            batch = self.store.outbox_next(excluded)
+        if batch is None:
+            return
+        self.outbox_cursor = (batch["timestamp"], batch["path"])
+        if batch["final_snapshot"] is not None:
+            self.queue_final(batch)
+        else:
+            self.reporter.set(
+                batch["id"],
+                batch["pending"],
+                terminal=True,
+                expires_at_ms=batch["report_expires_ms"],
+            )
+            self.outbox_id = batch["id"]
+
+    def expire_reports(self):
+        for batch_id in self.store.expire_reports():
+            self.reporter.remove(batch_id)
+            if self.outbox_id == batch_id:
+                self.outbox_id = None
+            tracker = self.final_errors.pop(batch_id, None)
+            if tracker:
+                tracker.recovered()
+
+    def scan(self, wait=None):
+        """Request discovery; direct callers can wait, while run() never blocks."""
+        target = self.scan_rounds + 1
+        if not self.running or self.scanner.thread is None:
+            self.scanner.request_scan()
+        if wait if wait is not None else not self.running:
+            self._wait_scan(lambda: self.scan_rounds >= target)
+            self._fill_window()
+            self._wait_scan(lambda: not self.preparing)
+
+    def _wait_scan(self, predicate):
+        deadline = time.monotonic() + 30
+        while not predicate() and not self.stop_event.is_set():
+            self._consume_scan()
+            if time.monotonic() > deadline:
+                raise TimeoutError("等待目录扫描结果超时")
+            time.sleep(0.005)
+
+    def _scan_error(self, path, exc):
+        self.scan_error_paths.add(path)
+        info = make_error(
+            "local",
+            "scan",
+            exc,
+            context=dict(path=str(self.config.source_dir / path)),
+            hint="请检查目录及权限，工具会继续尝试。",
+        )
+        signature = (type(exc).__name__, str(exc), getattr(exc, "errno", None))
+        previous = self.scan_logs.get(path)
+        now = time.monotonic()
+        if previous and previous[0] == signature:
+            info["error_id"] = previous[3]
+        if previous is None or previous[0] != signature or now - previous[1] >= 60:
+            if previous and previous[0] == signature:
+                info["context"]["repeat_count"] = previous[2] + 1
+            log_error(logger, info)
+            self.scan_logs[path] = (signature, now, 0, info["error_id"])
+        else:
+            self.scan_logs[path] = (signature, previous[1], previous[2] + 1, previous[3])
+        self.scan_errors[path] = info
+        self.scan_errors.move_to_end(path)
+        while len(self.scan_errors) > 50:
+            self.scan_errors.popitem(last=False)
+
+    def _consume_scan(self):
+        deadline = time.monotonic() + 0.05
+        for _ in range(SCAN_QUEUE_SIZE):
+            if self.stop_event.is_set() or time.monotonic() >= deadline:
                 break
-            relative = source.relative_to(self.config.source_dir).as_posix()
-            batch = self.store.add(relative, self.config)
-            if batch["state"] in ("done", "rejected") or batch["id"] in self.progress:
-                continue
             try:
-                entries = manifest(source, self.config.max_files_per_batch)
-                progress = BatchProgress(
-                    batch,
-                    entries,
-                    self.source,
-                    failed=batch["attempts"] > 0 or bool(batch["error_info"]),
+                event = self.scanner.events.get_nowait()
+            except queue.Empty:
+                break
+            kind = event["kind"]
+            if kind == "fatal":
+                raise event["error"]
+            if kind == "scan_start":
+                self.scan_status.update(state="scanning", checked_dirs=0)
+            elif kind == "root_ok":
+                self.source_available = True
+                self.root_errors.recovered()
+            elif kind == "root_error":
+                self.source_available = False
+                self.scan_rounds += 1
+                self.scan_status.update(state="error", checked_dirs=event["checked"])
+                self.root_errors.failed(
+                    make_error(
+                        "local",
+                        "scan",
+                        event["error"],
+                        context=dict(path=str(self.config.source_dir)),
+                        hint="请检查源目录及权限，工具会继续尝试；恢复前暂停启动新上传批次。",
+                    )
                 )
-                self.progress[batch["id"]] = progress
-                self.store.update(
-                    batch["id"], files=len(entries), bytes=sum(e.size for e in entries)
+            elif kind == "scan_progress":
+                self.scan_status["checked_dirs"] = event["checked"]
+            elif kind == "scan_complete":
+                self.scan_rounds += 1
+                self.scan_status.update(
+                    state="idle", last_completed_ms=now_ms(), checked_dirs=event["checked"]
                 )
-                self.reporter.set(batch["id"], progress)
-            except RejectedBatch as exc:
-                self.batch_failure(batch, "scan", exc, state="rejected", pending=None)
-            except OSError as exc:
-                self.batch_failure(
-                    batch,
-                    "scan",
-                    exc,
-                    state="failed",
-                    retry_at=time.time() + 5,
+            elif kind == "directory_error":
+                self._scan_error(event["path"], event["error"])
+            elif kind == "directory_ok":
+                path = event["path"]
+                self.scan_error_paths.discard(path)
+                self.scan_errors.pop(path, None)
+                old = self.scan_logs.pop(path, None)
+                if old:
+                    logger.info("扫描异常已恢复 path=%s 错误 ID=%s", path, old[3])
+            elif kind == "discovered":
+                self.store.add(event["path"], self.config)
+                self.scanner.remember(event["path"])
+            elif kind == "manifest":
+                self._manifest_result(event)
+
+    def _manifest_result(self, event):
+        batch_id = event["batch_id"]
+        purpose = self.preparing.pop(batch_id, None)
+        if purpose is None:
+            return
+        batch = self.store.get(batch_id)
+        if "error" in event:
+            exc = event["error"]
+            self.batch_failure(
+                batch,
+                "scan",
+                exc,
+                state="rejected" if isinstance(exc, RejectedBatch) else "failed",
+                pending=None,
+                retry_at=0 if isinstance(exc, RejectedBatch) else time.time() + 5,
+            )
+            return
+        entries = event["entries"]
+        failed = batch["attempts"] > 0 or bool(batch["error_info"])
+        p = self.progress.get(batch_id)
+        if p is None:
+            p = BatchProgress(batch, entries, self.source, failed=failed)
+        else:
+            p.prepare(entries, failed=failed)
+        self.progress[batch_id] = p
+        self.store.update(batch_id, files=len(entries), bytes=sum(e.size for e in entries))
+        self.reporter.set(batch_id, p)
+        if purpose == "launch":
+            self.launch_ready = batch_id
+
+    def _make_room(self, batch_id):
+        if batch_id in self.progress or batch_id in self.preparing:
+            return True
+        if len(set(self.progress) | set(self.preparing)) < MANIFEST_WINDOW:
+            return True
+        for old in list(self.progress):
+            if old != self.active and old not in self.preparing:
+                self.progress.pop(old)
+                self.reporter.remove(old)
+                if self.launch_ready == old:
+                    self.launch_ready = None
+                return True
+        return False
+
+    def _request_manifest(self, batch, purpose):
+        batch_id = batch["id"]
+        if batch_id in self.preparing or not self._make_room(batch_id):
+            return False
+        if self.outbox_id == batch_id:
+            self.reporter.remove(batch_id)
+            self.outbox_id = None
+        self.scanner.request_manifest(batch_id, batch["path"], purpose)
+        self.preparing[batch_id] = purpose
+        return True
+
+    def _fill_window(self):
+        if not self.source_available or self.stop_event.is_set():
+            return
+        excluded = set(self.progress) | set(self.preparing)
+        for batch in self.store.candidates(excluded, limit=MANIFEST_WINDOW):
+            # Prefetch must not evict an earlier queued candidate merely because
+            # a later one was discovered. Failed/rejected slots may be released.
+            if len(set(self.progress) | set(self.preparing)) >= MANIFEST_WINDOW:
+                disposable = next(
+                    (
+                        k
+                        for k in self.progress
+                        if k != self.active
+                        and k not in self.preparing
+                        and self.store.get(k)["state"] in ("failed", "rejected")
+                    ),
+                    None,
                 )
+                if disposable is None:
+                    break
+                self.progress.pop(disposable)
+                self.reporter.remove(disposable)
+            self._request_manifest(batch, "prepare")
 
     @property
     def source(self):
@@ -186,50 +390,40 @@ class Supervisor:
             return ""
         return f"{self.config.zenoh['project_id']}/{self.config.zenoh['device_id']}"
 
-    def launch_next(self):
-        for batch in self.store.rows():
-            if self.stop_event.is_set():
+    def launch_next(self, wait=None):
+        self._launch_next_once()
+        if wait if wait is not None else not self.running:
+            deadline = time.monotonic() + 30
+            while self.process is None and self.preparing and not self.stop_event.is_set():
+                self._consume_scan()
+                self._launch_next_once()
+                if time.monotonic() > deadline:
+                    raise TimeoutError("等待批次文件清单超时")
+                time.sleep(0.005)
+
+    def _launch_next_once(self):
+        if self.process is not None or self.stop_event.is_set():
+            return
+        for candidate in self.store.candidates(limit=2, cleanup=True):
+            batch = self.store.get(candidate["id"])
+            if self.cleanup(batch):
+                continue
+            stage = self.config.work_dir / "staging" / batch["id"]
+            if stage.exists() or stage.is_symlink():
+                self.store.update(batch["id"], retry_at=time.time() + 5)
+                continue
+            self._launch(batch, [], cleanup_only=True)
+            return
+        if not self.source_available:
+            return
+        if self.launch_ready is not None:
+            batch_id, self.launch_ready = self.launch_ready, None
+            batch = self.store.get(batch_id)
+            if batch["state"] in ("done", "rejected"):
                 return
-            if batch["retry_at"] > time.time() or batch["state"] == "rejected":
-                continue
-            if batch["cleanup_pending"]:
-                # Retry local cleanup; if an OBS checkpoint remains, ask the child
-                # to abort it without blocking the supervisor/control loop.
-                self.cleanup(batch)
-                stage = self.config.work_dir / "staging" / batch["id"]
-                if stage.exists() or stage.is_symlink():
-                    self.store.update(batch["id"], retry_at=time.time() + 5)
-                    continue
-                self._launch(batch, [], cleanup_only=True)
-                return
-            if batch["state"] == "done":
-                continue
-            try:
-                entries = manifest(
-                    self.config.source_dir / batch["path"], self.config.max_files_per_batch
-                )
-            except RejectedBatch as exc:
-                self.batch_failure(batch, "scan", exc, state="rejected", pending=None)
-                continue
-            except OSError as exc:
-                self.batch_failure(
-                    batch,
-                    "scan",
-                    exc,
-                    state="failed",
-                    retry_at=time.time() + 5,
-                )
-                continue
-            failed = batch["attempts"] > 0 or bool(batch["error_info"])
-            p = self.progress.get(batch["id"])
-            if p is None:
-                p = BatchProgress(batch, entries, self.source, failed=failed)
-            else:
-                p.prepare(entries, failed=failed)
-            self.progress[batch["id"]] = p
-            self.reporter.set(batch["id"], p)
+            entries = list(self.progress[batch_id].entries.values())
             self.store.update(
-                batch["id"],
+                batch_id,
                 state="copying",
                 attempts=batch["attempts"] + 1,
                 files=len(entries),
@@ -239,6 +433,9 @@ class Supervisor:
             )
             self._launch(batch, entries)
             return
+        candidates = self.store.candidates(limit=1)
+        if candidates:
+            self._request_manifest(candidates[0], "launch")
 
     def _launch(self, batch, entries, cleanup_only=False):
         parent, child = self.context.Pipe()
@@ -329,22 +526,31 @@ class Supervisor:
             self.fail_progress(self.active)
 
     def drain(self):
+        self._consume_scan()
         self._drain_worker_events()
         if self.process and not self.process.is_alive():
             self.process.join()
             # The child may have sent its final log/result after the first poll.
             self._drain_worker_events()
             self._finish()
+        outbox_acked = False
         while True:
             try:
                 batch_id, payload = self.reporter.acks.get_nowait()
             except queue.Empty:
                 break
-            self.store.acknowledge(batch_id, payload)
+            acknowledged = self.store.acknowledge(batch_id, payload)
+            if batch_id == self.outbox_id and acknowledged:
+                self.reporter.remove(batch_id)
+                self.outbox_id = None
+                outbox_acked = True
+        self._fill_window()
+        if outbox_acked:
+            self._fill_outbox()
         if self.config.reports and time.monotonic() >= self.next_final_retry:
             self.next_final_retry = time.monotonic() + 1
-            for batch in self.store.finals_to_prepare():
-                self.queue_final(batch)
+            self.expire_reports()
+            self._fill_outbox()
 
     def _finish(self):
         batch = self.store.get(self.active)
@@ -420,8 +626,16 @@ class Supervisor:
                 retry_at=time.time() + delay,
                 pending=payload,
                 final_snapshot=final_snapshot,
+                report_expires_ms=(
+                    batch["timestamp"] + DEFERRED_REPORT_TTL_MS
+                    if final_snapshot is not None and not self.config.reports
+                    else 0
+                ),
             )
+            if not self.config.reports:
+                self.expire_reports()
             if final_snapshot is not None:
+                self.reporter.remove(self.active)
                 self.queue_final(self.store.get(self.active))
             elif payload is not None:
                 self.reporter.set(
@@ -440,20 +654,27 @@ class Supervisor:
         self.process = self.pipe = self.active = self.result = None
 
     def snapshot(self, state="running"):
-        rows = self.store.rows()
-        counts = dict(collections.Counter(r["state"] for r in rows))
+        counts, batch_errors = self.store.summary()
         active = self.store.get(self.active) if self.active else None
-        batch_errors = [
-            dict(path=r["path"], state=r["state"], error=summary(info), error_info=info)
-            for r in rows
-            for info in (r["error_info"], r["cleanup_error_info"])
-            if info
-        ]
+        for item in batch_errors:
+            item["error"] = summary(item["error_info"])
         current = self.error_info
         if current is None:
             current = next((tracker.info for tracker in self.final_errors.values()), None)
         if current is None and batch_errors:
-            current = batch_errors[-1]["error_info"]
+            current = batch_errors[0]["error_info"]
+        if current is None:
+            current = self.root_errors.info or next(iter(self.scan_errors.values()), None)
+        scan_errors = list(self.scan_errors.values())
+        if self.root_errors.info:
+            scan_errors = [self.root_errors.info] + scan_errors[-49:]
+        pending = sum(counts.get(s, 0) for s in ("queued", "failed", "interrupted"))
+        prepared = sum(
+            1
+            for k in self.progress
+            if k != self.active
+            and self.store.get(k)["state"] in ("queued", "failed", "interrupted")
+        )
         return dict(
             state=state,
             run_mode=self.config.run_mode,
@@ -469,11 +690,18 @@ class Supervisor:
             error_info=current,
             reporter=self.reporter.diagnostics(),
             batch_errors=batch_errors[-50:],
+            scan=dict(
+                self.scan_status,
+                error_count=len(self.scan_error_paths) + bool(self.root_errors.info),
+                pending_manifest_batches=max(0, pending - prepared),
+            ),
+            scan_errors=scan_errors[-50:],
         )
 
     def run(self):
         failed = False
         next_scan = next_status = 0
+        self.running = True
         try:
             self.initialize()
             while not self.stop_event.is_set():
@@ -520,6 +748,7 @@ class Supervisor:
                     self.fail_progress(batch_id)
             raise DiagnosticError(self.error_info) from exc
         finally:
+            self.scanner.close()
             if self.process:
                 with contextlib.suppress(OSError):
                     self.pipe.send("stop")
@@ -541,6 +770,7 @@ class Supervisor:
                 write_json(self.status_path, self.snapshot("failed" if failed else "stopped"))
             finally:
                 self.store.close()
+                self.running = False
 
 
 def main(config_path, handshake, effective_path=None):

@@ -9,6 +9,7 @@ import time
 import uuid
 
 logger = logging.getLogger(__name__)
+DEFERRED_REPORT_TTL_MS = 24 * 60 * 60 * 1000
 
 
 def now_ms():
@@ -22,6 +23,7 @@ class BatchStore:
         bind_mode(config)
         self.db = sqlite3.connect(config.work_dir / "batches.sqlite3")
         self.db.row_factory = sqlite3.Row
+        self.on_close = None
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript("""
@@ -34,14 +36,34 @@ class BatchStore:
                 cleanup_error_info TEXT,
                 cleanup_pending INTEGER NOT NULL DEFAULT 0, pending BLOB,
                 report_enabled INTEGER NOT NULL DEFAULT 0, final_snapshot TEXT,
+                report_expires_ms INTEGER NOT NULL DEFAULT 0,
                 files INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0
             );
+            CREATE INDEX IF NOT EXISTS batches_order ON batches(timestamp,path);
+            CREATE INDEX IF NOT EXISTS batches_schedule ON batches(state,retry_at);
+            CREATE INDEX IF NOT EXISTS batches_cleanup ON batches(cleanup_pending,retry_at);
         """)
         source = str(config.source_dir)
         row = self.db.execute("SELECT value FROM settings WHERE key='source_dir'").fetchone()
         if row and row[0] != source:
             self.db.close()
             raise ValueError("工作目录绑定的 source_dir 不同，请使用新的工作目录")
+        columns = {r[1] for r in self.db.execute("PRAGMA table_info(batches)")}
+        if "report_expires_ms" not in columns:
+            self.db.execute("BEGIN")
+            self.db.execute(
+                "ALTER TABLE batches ADD COLUMN report_expires_ms INTEGER NOT NULL DEFAULT 0"
+            )
+            for batch in self.db.execute(
+                "SELECT id,timestamp,final_snapshot FROM batches "
+                "WHERE state='done' AND final_snapshot IS NOT NULL"
+            ):
+                # Older upload_only snapshots deliberately have no Zenoh source.
+                if json.loads(batch["final_snapshot"]).get("source") == "":
+                    self.db.execute(
+                        "UPDATE batches SET report_expires_ms=? WHERE id=?",
+                        (batch["timestamp"] + DEFERRED_REPORT_TTL_MS, batch["id"]),
+                    )
         self.db.execute("INSERT OR IGNORE INTO settings VALUES ('source_dir',?)", (source,))
         self.db.commit()
         self.configure_batches(config)
@@ -54,7 +76,10 @@ class BatchStore:
         """Apply startup policy without touching completed upload history."""
         changed = 0
         with self.db:
-            for batch in self.db.execute("SELECT * FROM batches WHERE state!='done'").fetchall():
+            for batch in self.db.execute(
+                "SELECT id,path,asset_path,report_enabled,task_type,collect_method "
+                "FROM batches WHERE state!='done'"
+            ):
                 target = self.target(config, batch["path"])
                 if target != batch["asset_path"]:
                     self.db.execute(
@@ -120,6 +145,59 @@ class BatchStore:
             for r in self.db.execute("SELECT * FROM batches ORDER BY timestamp,path")
         ]
 
+    def paths(self):
+        return (r[0] for r in self.db.execute("SELECT path FROM batches"))
+
+    def candidates(self, excluded=(), limit=2, *, cleanup=False):
+        excluded = tuple(excluded)
+        clause = (
+            "cleanup_pending=1"
+            if cleanup
+            else "state IN ('queued','failed','interrupted') AND cleanup_pending=0"
+        )
+        if excluded:
+            clause += " AND id NOT IN (" + ",".join("?" for _ in excluded) + ")"
+        return [
+            dict(r)
+            for r in self.db.execute(
+                f"SELECT id,path FROM batches WHERE {clause} AND retry_at<=? "
+                "ORDER BY timestamp,path LIMIT ?",
+                (*excluded, time.time(), limit),
+            )
+        ]
+
+    def outbox_next(self, excluded=(), after=None):
+        excluded = tuple(excluded)
+        clause = "(pending IS NOT NULL OR (state='done' AND final_snapshot IS NOT NULL))"
+        args = []
+        if excluded:
+            clause += " AND id NOT IN (" + ",".join("?" for _ in excluded) + ")"
+            args.extend(excluded)
+        if after is not None:
+            clause += " AND (timestamp,path)>(?,?)"
+            args.extend(after)
+        row = self.db.execute(
+            f"SELECT id FROM batches WHERE {clause} ORDER BY timestamp,path LIMIT 1", args
+        ).fetchone()
+        return self.get(row[0]) if row else None
+
+    def summary(self):
+        counts = {
+            r[0]: r[1] for r in self.db.execute("SELECT state,COUNT(*) FROM batches GROUP BY state")
+        }
+        errors = []
+        for row in self.db.execute(
+            "SELECT path,state,error_info,cleanup_error_info FROM batches "
+            "WHERE error_info IS NOT NULL OR cleanup_error_info IS NOT NULL "
+            "ORDER BY timestamp DESC,path DESC LIMIT 50"
+        ):
+            for key in ("error_info", "cleanup_error_info"):
+                if row[key]:
+                    errors.append(
+                        dict(path=row["path"], state=row["state"], error_info=json.loads(row[key]))
+                    )
+        return counts, errors[:50]
+
     def finals_to_prepare(self):
         return [
             self._decode(r)
@@ -128,6 +206,27 @@ class BatchStore:
                 AND final_snapshot IS NOT NULL AND pending IS NULL"""
             )
         ]
+
+    def expire_reports(self):
+        """Discard expired outbox data without changing successful upload history."""
+        with self.db:
+            expired = self.db.execute(
+                """SELECT id,path FROM batches WHERE state='done'
+                AND report_expires_ms>0 AND report_expires_ms<=?
+                AND (pending IS NOT NULL OR final_snapshot IS NOT NULL)""",
+                (now_ms(),),
+            ).fetchall()
+            self.db.executemany(
+                "UPDATE batches SET pending=NULL,final_snapshot=NULL WHERE id=?",
+                [(row["id"],) for row in expired],
+            )
+        for row in expired:
+            logger.info(
+                "补报已过期，首次入队已满 24 小时；保留上传成功记录 batch_id=%s path=%s",
+                row["id"],
+                row["path"],
+            )
+        return [row["id"] for row in expired]
 
     def update(self, batch_id, **values):
         allowed = {
@@ -142,6 +241,7 @@ class BatchStore:
             "files",
             "bytes",
             "final_snapshot",
+            "report_expires_ms",
         }
         if not values.keys() <= allowed:
             raise ValueError("Invalid batch update")
@@ -156,10 +256,11 @@ class BatchStore:
 
     def acknowledge(self, batch_id, payload):
         with self.db:
-            self.db.execute(
+            result = self.db.execute(
                 "UPDATE batches SET pending=NULL,final_snapshot=NULL WHERE id=? AND pending=?",
                 (batch_id, payload),
             )
+        return result.rowcount > 0
 
     def recover(self):
         with self.db:
@@ -167,4 +268,6 @@ class BatchStore:
                 WHERE state IN ('copying','validating','uploading','interrupted','rejected','failed')""")
 
     def close(self):
+        if self.on_close:
+            self.on_close()
         self.db.close()

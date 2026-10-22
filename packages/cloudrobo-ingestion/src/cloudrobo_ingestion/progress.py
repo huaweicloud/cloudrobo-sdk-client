@@ -182,6 +182,7 @@ class Reporter:
         self.factory = factory or self._transport
         self.lock = threading.Lock()
         self.slots = {}
+        self.expirations = {}
         self.acks = queue.Queue()
         self.stop_event = threading.Event()
         self.wake = threading.Event()
@@ -221,17 +222,30 @@ class Reporter:
             raise DiagnosticError(info) from exc
         return t
 
-    def set(self, batch_id, snapshot, terminal=False):
+    def set(self, batch_id, snapshot, terminal=False, expires_at_ms=0):
         with self.lock:
             self.slots[batch_id] = (snapshot, terminal)
+            self.expirations[batch_id] = expires_at_ms
         self.wake.set()
 
     def remove(self, batch_id):
         with self.lock:
             self.slots.pop(batch_id, None)
+            self.expirations.pop(batch_id, None)
             tracker = self.serialization_errors.pop(batch_id, None)
             if tracker:
                 tracker.recovered()
+
+    def contains(self, batch_id):
+        with self.lock:
+            return batch_id in self.slots
+
+    def _publishable(self, batch_id, slot):
+        with self.lock:
+            if self.slots.get(batch_id) is not slot:
+                return False
+            expires = self.expirations.get(batch_id, 0)
+            return not expires or now_ms() < expires
 
     def diagnostics(self):
         with self.lock:
@@ -266,6 +280,8 @@ class Reporter:
                     continue
                 payloads = []
                 for batch_id, slot in slots.items():
+                    if not self._publishable(batch_id, slot):
+                        continue
                     snapshot, terminal = slot
                     try:
                         payload = snapshot if isinstance(snapshot, bytes) else snapshot.serialize()
@@ -300,12 +316,16 @@ class Reporter:
                         connection_info = getattr(transport, "connection_info", lambda: None)()
                         if connection_info and connection_info.get("connected") is False:
                             raise ConnectionError("Zenoh link disconnected")
+                        # Connecting/retrying may have crossed the expiry boundary.
+                        if not self._publishable(batch_id, slot):
+                            continue
                         transport.publish(self.topic, payload)
                         with self.lock:
                             self.errors.recovered()
                             self.status.update(connected=True, last_published_ms=now_ms(), error="")
                             if terminal and self.slots.get(batch_id) is slot:
                                 self.slots.pop(batch_id)
+                                self.expirations.pop(batch_id, None)
                         self.acks.put((batch_id, payload))
                     retry_at = 0
                 except Exception as exc:

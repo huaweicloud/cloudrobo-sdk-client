@@ -265,19 +265,69 @@ def test_supervisor_failure_retries_after_recopy(config, batch_dir, caplog):
     s.store.close()
 
 
-def test_recovery_cleans_interrupted_staging(config, batch_dir):
+@pytest.mark.parametrize("phase", ["queued", "copying", "validating", "uploading"])
+def test_recovery_cleans_interrupted_staging(config, batch_dir, phase):
     store = BatchStore(config)
     b = store.add("批次001", config)
     stage = config.work_dir / "staging" / b["id"]
     stage.mkdir(parents=True)
     (stage / "leftover").write_bytes(b"partial")
-    store.update(b["id"], state="uploading", cleanup_pending=1)
+    store.update(b["id"], state=phase, attempts=2, cleanup_pending=1)
     store.close()
     s = Supervisor(config, Reporter("unused", config.topic), config.work_dir / "status.json")
     s.initialize()
+    # Startup does not walk every historical staging path; scheduling cleans
+    # pending leftovers incrementally before admitting a new upload.
+    s.launch_next()
     assert not stage.exists()
-    assert s.store.get(b["id"])["state"] == "queued"
+    recovered = s.store.get(b["id"])
+    assert recovered["state"] == "queued" and recovered["attempts"] == 2
+    assert recovered["timestamp"] == b["timestamp"] and not recovered["cleanup_pending"]
     s.store.close()
+
+
+def test_recovery_preserves_committed_success_before_cleanup_and_report(config, batch_dir):
+    from cloudrobo_ingestion.progress import BatchProgress
+
+    store = BatchStore(config)
+    batch = store.add("批次001", config)
+    progress = BatchProgress(batch, manifest(batch_dir), "r2c/local")
+    for entry in progress.entries.values():
+        progress.update(entry.path, 2, entry.size)
+    progress.finished = True
+    payload = progress.serialize()
+    stage = config.work_dir / "staging" / batch["id"]
+    stage.mkdir(parents=True)
+    (stage / "leftover").write_bytes(b"uploaded")
+    store.update(
+        batch["id"],
+        state="done",
+        attempts=1,
+        cleanup_pending=1,
+        final_snapshot=progress.snapshot(),
+        pending=payload,
+    )
+    store.close()  # Model a committed upload with cleanup/publication still outstanding.
+
+    reporter = Reporter("unused", config.topic)
+    s = Supervisor(config, reporter, config.work_dir / "status.json")
+    try:
+        s.initialize()
+        s.scan()
+        s.launch_next()
+        restored = s.store.get(batch["id"])
+        assert not stage.exists() and s.process is None and not s.progress
+        assert restored["state"] == "done" and restored["attempts"] == 1
+        assert restored["timestamp"] == batch["timestamp"]
+        assert not restored["cleanup_pending"]
+        assert reporter.slots[batch["id"]] == (payload, True)
+        reporter.acks.put((batch["id"], payload))
+        s.drain()
+        restored = s.store.get(batch["id"])
+        assert restored["pending"] is restored["final_snapshot"] is None
+        assert restored["state"] == "done" and not reporter.slots
+    finally:
+        s.store.close()
 
 
 def test_stop_terminates_blocked_upload(config, batch_dir):

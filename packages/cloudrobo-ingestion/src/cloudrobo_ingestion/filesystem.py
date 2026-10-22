@@ -26,7 +26,7 @@ def is_link(path: Path) -> bool:
     return stat.S_ISLNK(s.st_mode) or bool(getattr(s, "st_file_attributes", 0) & 0x400)
 
 
-def _walk(root: Path):
+def _walk(root: Path, stop=None):
     if is_link(root):
         raise RejectedBatch(f"不允许链接或 junction: {root.name}")
     for current, dirs, files in os.walk(
@@ -34,6 +34,8 @@ def _walk(root: Path):
     ):
         base = Path(current)
         for name in dirs + files:
+            if stop is not None and stop.is_set():
+                raise InterruptedBatch()
             p = base / name
             if is_link(p):
                 raise RejectedBatch(f"不允许链接或 junction: {p.relative_to(root)}")
@@ -60,13 +62,17 @@ class FileEntry:
     inode: int
 
 
-def manifest(root: Path, max_files: int = DEFAULT_MAX_FILES_PER_BATCH) -> list[FileEntry]:
+def manifest(
+    root: Path, max_files: int = DEFAULT_MAX_FILES_PER_BATCH, *, stop=None
+) -> list[FileEntry]:
     marker = root / MARKER
     if is_link(marker) or not marker.is_file() or marker.stat().st_size:
         raise RejectedBatch("__UPLOAD_READY__ 必须是空的普通文件")
     entries = []
-    for base, _, files in _walk(root):
+    for base, _, files in _walk(root, stop):
         for name in sorted(files):
+            if stop is not None and stop.is_set():
+                raise InterruptedBatch()
             if name == MARKER:
                 continue
             p = base / name

@@ -96,6 +96,12 @@ def status(as_json):
     click.echo(f"批次统计: {result.get('counts', {})}")
     click.echo(f"当前批次: {result.get('active_batch') or '-'}")
     click.echo(f"上传进度: {result.get('progress', {})}")
+    scan = result.get("scan", {})
+    if scan:
+        click.echo(
+            f"扫描状态: {scan.get('state', 'idle')}，已检查目录: {scan.get('checked_dirs', 0)}，扫描异常: {scan.get('error_count', 0)}"
+        )
+        click.echo(f"等待建立清单批次: {scan.get('pending_manifest_batches', 0)}")
     reporter = result.get("reporter", {})
     click.echo(
         f"上报状态: {'未启用' if not reporter.get('enabled', True) else '连接正常（仅本地调用）' if reporter.get('connected') else '未连接'}"
@@ -105,7 +111,9 @@ def status(as_json):
         if item.get("error_info"):
             show_error(item["error_info"])
             shown.add(item["error_info"]["error_id"])
-    for info in [result.get("error_info")] + reporter.get("errors", []):
+    for info in (
+        result.get("scan_errors", []) + [result.get("error_info")] + reporter.get("errors", [])
+    ):
         if info and info["error_id"] not in shown:
             show_error(info)
             shown.add(info["error_id"])
