@@ -43,7 +43,7 @@ def pump(s, condition, timeout=30):
     raise AssertionError("Scanner did not reach expected state")
 
 
-def paused_upload(config, batch, entries, connection, cleanup_only=False):
+def paused_upload(config, batch_record, entries, connection, cleanup_only=False):
     connection.send(dict(event="phase", state="uploading"))
     for entry in entries:
         connection.send(dict(event="file", path=entry.path, state=1, transferred=0, begin=True))

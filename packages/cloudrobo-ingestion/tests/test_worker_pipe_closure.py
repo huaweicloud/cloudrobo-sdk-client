@@ -29,20 +29,20 @@ class ClosingPipe:
         self.closure_reads = 0
         self.closed = False
 
-    def _closed(self):
+    def _closed_error(self) -> Exception:
         self.closure_reads += 1
         assert self.closure_reads == 1, "Supervisor read a closed channel again"
-        raise closed_error(self.kind)
+        return closed_error(self.kind)
 
-    def poll(self):
+    def poll(self) -> bool:
         if self.events or self.where == "recv":
             return True
-        self._closed()
+        raise self._closed_error()
 
-    def recv(self):
+    def recv(self) -> dict:
         if self.events:
             return self.events.popleft()
-        self._closed()
+        raise self._closed_error()
 
     def send(self, message):
         pass
