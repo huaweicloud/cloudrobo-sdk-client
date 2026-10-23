@@ -66,7 +66,7 @@ def test_manifest_checked_copy_is_read_only(config, batch_dir):
     }
 
 
-@pytest.mark.parametrize("limit", [100, 2, 5001])
+@pytest.mark.parametrize("limit", [50, 2, 5001])
 def test_manifest_limit_exact(config, limit):
     root = config.source_dir / "many"
     root.mkdir()
@@ -74,13 +74,13 @@ def test_manifest_limit_exact(config, limit):
     for i in range(limit):
         (root / f"{i}.txt").touch()
     assert len(manifest(root, limit)) == limit
-    if limit == 100:
-        assert len(manifest(root)) == 100
+    if limit == 50:
+        assert len(manifest(root)) == 50
     (root / "overflow.txt").touch()
     with pytest.raises(RejectedBatch, match=str(limit)):
         manifest(root, limit)
-    if limit == 100:
-        with pytest.raises(RejectedBatch, match="100"):
+    if limit == 50:
+        with pytest.raises(RejectedBatch, match="50"):
             manifest(root)
 
 

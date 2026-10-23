@@ -3,7 +3,7 @@ source_dir: ./customer-data
 # 默认模式和仅上传模式可共用。
 work_dir: ./ingestion-work
 obs_path: obs://customer-bucket/robot-data/
-max_files_per_batch: 100
+max_files_per_batch: 50
 task_type: 超市取货
 collect_method: 遥操接管
 validation:

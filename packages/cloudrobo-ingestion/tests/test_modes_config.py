@@ -26,7 +26,7 @@ def test_invalid_batch_file_limit(config_file, mode, value):
 
 
 def test_batch_file_limit_priority_and_effective_config(config_file):
-    assert IngestionConfig.load(config_file).max_files_per_batch == 100
+    assert IngestionConfig.load(config_file).max_files_per_batch == 50
     update(config_file, max_files_per_batch=5001)
     assert (
         IngestionConfig.load(config_file, dict(max_files_per_batch=None)).max_files_per_batch

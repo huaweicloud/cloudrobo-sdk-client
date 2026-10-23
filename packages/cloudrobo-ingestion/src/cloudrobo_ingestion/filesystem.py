@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MARKER = "__UPLOAD_READY__"
-DEFAULT_MAX_FILES_PER_BATCH = 100
+DEFAULT_MAX_FILES_PER_BATCH = 50
 
 
 class RejectedBatch(ValueError):
