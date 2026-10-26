@@ -28,6 +28,7 @@ dependencies = [
     "click>=8.0",
     "hw-cloudrobo-core>=0.1.0",
     "pydantic>=2.0",
+    "msgpack>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]
@@ -87,6 +88,8 @@ q25 = "cloudrobo_r2c.robots.q25.q25_hardware_adapter:create_q25_adapter"
 q25_ros2 = "cloudrobo_r2c.robots.q25_hardware_adapter:create_q25_ros2_adapter"
 tsd = "cloudrobo_r2c.robots.tsd.tsd_hardware_adapter:create_tsd_adapter"
 a1z = "cloudrobo_r2c.robots.a1z_hardware_adapter:create_a1z_adapter"
+s05 = "cloudrobo_r2c.robots.s05_hardware_adapter:create_s05_adapter"
+xifeng = "cloudrobo_r2c.robots.xifeng.xifeng_adapter:create_xifeng_adapter"
 
 [project.entry-points."r2c_sdk.transformers"]
 

@@ -6,8 +6,10 @@ import logging
 import math
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Callable, Dict, Mapping, Sequence
 import array
+import base64
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -2188,3 +2190,228 @@ def build_transformer_registry(
     if overrides:
         registry.update(overrides)
     return registry
+
+
+def json_pack(payload: Any, config: Any = None) -> bytes:
+    """Serialize payload to JSON bytes (with numpy-aware encoding).
+
+    numpy arrays/generics are encoded into tagged markers via
+    ``_json_safe_numpy`` (recursively, so nested dict/list values are captured)
+    and ``pack_json_array``. This mirrors the numpy-awareness of ``msgpack_pack``
+    while staying JSON-compatible. ``ensure_ascii=False`` preserves non-ASCII
+    text such as Chinese.
+
+    Raises:
+        ValueError: If a numpy object has an unsupported dtype
+            (void/object/complex128).
+    """
+    import json
+
+    return json.dumps(
+        _json_safe_numpy(payload), ensure_ascii=False
+    ).encode("utf-8")
+
+
+def json_unpack(data: bytes, config: Any = None) -> Any:
+    """Deserialize JSON bytes to payload (with numpy-aware decoding).
+
+    numpy markers are restored back to numpy arrays/generics via
+    ``unpack_json_array``, registered as the ``object_hook``.
+    """
+    import json
+
+    if isinstance(data, (bytes, bytearray)):
+        data = data.decode("utf-8")
+    return json.loads(data, object_hook=unpack_json_array)
+
+
+def pack_array(obj: Any) -> Any:
+    """Convert numpy arrays/generics into msgpack-serializable markers.
+
+    numpy arrays become ``{b"__ndarray__", data, dtype, shape}`` dicts so they
+    survive msgpack serialization (openpi-compatible line format). numpy
+    scalars/generics become ``{b"__npgeneric__", data, dtype}`` markers.
+
+    Raises:
+        ValueError: If the object dtype is unsupported (void/object/complex128).
+    """
+    if isinstance(obj, (np.ndarray, np.generic)) and obj.dtype.kind in ("V", "O", "c"):
+        raise ValueError(f"Unsupported dtype: {obj.dtype}")
+
+    if isinstance(obj, np.ndarray):
+        return {
+            b"__ndarray__": True,
+            b"data": obj.tobytes(),
+            b"dtype": obj.dtype.str,
+            b"shape": obj.shape,
+        }
+
+    if isinstance(obj, np.generic):
+        return {
+            b"__npgeneric__": True,
+            b"data": obj.item(),
+            b"dtype": obj.dtype.str,
+        }
+
+    return obj
+
+
+def unpack_array(obj: Any) -> Any:
+    """Restore msgpack-unpacked numpy markers back to numpy arrays/generics."""
+    if b"__ndarray__" in obj:
+        return np.ndarray(
+            buffer=obj[b"data"], dtype=np.dtype(obj[b"dtype"]), shape=obj[b"shape"]
+        )
+
+    if b"__npgeneric__" in obj:
+        return np.dtype(obj[b"dtype"]).type(obj[b"data"])
+
+    return obj
+
+
+def pack_json_array(obj: Any) -> Any:
+    """Convert a numpy array/generic into a JSON-serializable marker dict.
+
+    Since JSON has no binary type, the array bytes are base64-encoded and the
+    shape is stored as a plain list. The marker keys use *string* form
+    (``"__ndarray__"`` / ``"__npgeneric__"``) — unlike msgpack's byte keys —
+    because ``json.dumps``/``json.loads`` only allow string dict keys.
+
+    numpy arrays become ``{"__ndarray__", data, dtype, shape}`` dicts (data is a
+    base64 string). numpy scalars/generics become ``{"__npgeneric__", data,
+    dtype}`` markers, mirroring ``pack_array`` for msgpack.
+
+    Raises:
+        ValueError: If the object dtype is unsupported (void/object/complex128).
+    """
+    if isinstance(obj, (np.ndarray, np.generic)) and obj.dtype.kind in ("V", "O", "c"):
+        raise ValueError(f"Unsupported dtype: {obj.dtype}")
+
+    if isinstance(obj, np.ndarray):
+        return {
+            "__ndarray__": True,
+            "data": base64.b64encode(obj.tobytes()).decode("ascii"),
+            "dtype": obj.dtype.str,
+            "shape": list(obj.shape),
+        }
+
+    if isinstance(obj, np.generic):
+        return {
+            "__npgeneric__": True,
+            "data": obj.item(),
+            "dtype": obj.dtype.str,
+        }
+
+    return obj
+
+
+def pack_json_bytes(obj: Any) -> Any:
+    """Convert ``bytes``/``bytearray`` into a JSON-serializable marker dict.
+
+    JSON has no native binary type, so raw bytes are base64-encoded and wrapped
+    in a ``{"__bytes__": true, "data": <base64>}`` marker. This mirrors the
+    numpy marker handling above and keeps the decode symmetric (``unpack_json_array``
+    restores the base64 payload back to ``bytes``).
+    """
+    return {
+        "__bytes__": True,
+        "data": base64.b64encode(bytes(obj)).decode("ascii"),
+    }
+
+
+def _json_safe_numpy(payload: Any) -> Any:
+    """Recursively replace numpy arrays/generics with JSON-safe markers.
+
+    Walks nested ``dict``/``list``/``tuple`` structures so that *every* numpy
+    object (including ``np.float64``, which ``json.dumps`` would otherwise
+    serialize as a plain ``float`` and lose its type) is captured and tagged
+    with its dtype/shape. Bare ``bytes``/``bytearray`` are encoded into
+    ``__bytes__`` markers so they survive JSON serialization too. Ordinary
+    JSON-compatible values pass through unchanged.
+    """
+    if isinstance(payload, dict):
+        return {k: _json_safe_numpy(v) for k, v in payload.items()}
+    if isinstance(payload, (list, tuple)):
+        return [_json_safe_numpy(v) for v in payload]
+    if isinstance(payload, (bytes, bytearray)):
+        return pack_json_bytes(payload)
+    if isinstance(payload, (np.ndarray, np.generic)):
+        return pack_json_array(payload)
+    return payload
+
+
+def unpack_json_array(obj: Any) -> Any:
+    """Restore json-unpacked numpy markers back to numpy arrays/generics.
+
+    Registered as the ``object_hook`` for ``json.loads``, so it is invoked
+    bottom-up for every decoded JSON object, mirroring ``unpack_array`` for
+    msgpack.
+    """
+    if "__ndarray__" in obj:
+        data = base64.b64decode(obj["data"])
+        arr = np.frombuffer(data, dtype=np.dtype(obj["dtype"]))
+        # An empty marker shape ([], from a 0-d array) maps back to a 0-d
+        # array via `reshape(())`; any non-empty shape reshapes normally.
+        shape = obj["shape"]
+        return arr.reshape(shape if shape else ())
+
+    if "__npgeneric__" in obj:
+        return np.dtype(obj["dtype"]).type(obj["data"])
+
+    if "__bytes__" in obj:
+        return base64.b64decode(obj["data"])
+
+    return obj
+
+
+def msgpack_pack(payload: Any, config: Any = None) -> bytes:
+    """Serialize payload to msgpack bytes (with numpy-aware encoding).
+
+    numpy arrays/generics are encoded via ``pack_array`` into tagged markers so
+    they survive the wire, replicating openpi's numpy-msgpack line format that
+    the WebSocket inference transport depends on.
+    """
+    try:
+        import msgpack
+    except ImportError as e:
+        raise ImportError(
+            "msgpack is required for msgpack_pack transform. "
+            "Install with: pip install msgpack"
+        ) from e
+    return msgpack.packb(payload, use_bin_type=True, default=pack_array)
+
+
+def msgpack_unpack(data: bytes, config: Any = None) -> Any:
+    """Deserialize msgpack bytes to payload (with numpy-aware decoding).
+
+    numpy markers are restored back to numpy arrays/generics via
+    ``unpack_array``.
+    """
+    try:
+        import msgpack
+    except ImportError as e:
+        raise ImportError(
+            "msgpack is required for msgpack_unpack transform. "
+            "Install with: pip install msgpack"
+        ) from e
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    return msgpack.unpackb(data, raw=False, object_hook=unpack_array)
+
+
+PAYLOAD_CODECS: Dict[str, Callable[..., Any]] = {
+    # Canonical (no-suffix) names — retained for backward compatibility with
+    # existing configs / the migrator output.
+    "json_pack": json_pack,
+    "json_unpack": json_unpack,
+    "msgpack_pack": msgpack_pack,
+    "msgpack_unpack": msgpack_unpack,
+    # Design-document contract names (with "_transform" suffix, D1) — these are
+    # what docs/FE_multi_route defines (json_pack_transform etc.) and what
+    # *_apply_payload_transforms_ looks up at inference time. Each is aliased to
+    # the same canonical codec function.
+    "json_pack_transform": json_pack,
+    "json_unpack_transform": json_unpack,
+    "msgpack_pack_transform": msgpack_pack,
+    "msgpack_unpack_transform": msgpack_unpack,
+}
