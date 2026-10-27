@@ -449,7 +449,7 @@ def _print_eval_task_logs(client, task_id, log_type="system"):
 
 @eval_group.command("create-task")
 @click.option("--name", required=True, help="任务名称")
-@click.option("--task-config", required=True, help="任务配置(JSON)，包含algo_id/algo_name/algo_entrance/dataset_type/dataset_id/dataset_name/dataset_path/image/robot_config/worker_spec/resource_pool_type等全部字段")
+@click.option("--task-config", required=True, help="任务配置(JSON)，包含algo_id/algo_name/algo_entrance/dataset_type/dataset_id/dataset_name/dataset_path/image/worker_spec/resource_pool_type等全部字段")
 @click.option("--workspace-id", default=None, help="工作空间ID")
 @click.option("--wait", "wait_for_result", is_flag=True, help="创建后等待任务完成")
 @click.option("--timeout", type=int, default=1800, help="等待超时秒数")

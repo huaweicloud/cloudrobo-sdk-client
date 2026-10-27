@@ -36,7 +36,7 @@ PROC_TASK_REQUIRED_FIELDS = [
 EVAL_TASK_REQUIRED_FIELDS = [
     "name", "algo_id", "algo_name", "algo_entrance", "image",
     "dataset_type", "dataset_name", "dataset_path",
-    "robot_config", "resource_pool_type", "worker_spec",
+    "resource_pool_type", "worker_spec",
 ]
 
 SPEC_REQUIRED_KEYS = ["cpu", "memory"]
@@ -85,7 +85,6 @@ EVAL_TASK_COPY_FIELD_MAP = {
     "source_asset_name": "dataset_name",
     "source_asset_path": "dataset_path",
     "image": "image",
-    "robot_config": "robot_config",
     "resource_pool_type": "resource_pool_type",
     "resource_id": "resource_id",
     "dedicated_pool_name": "dedicated_pool_name",

@@ -149,7 +149,8 @@ class TestDatasetClient:
         assert body["dataset_id"] == "ds1"
         assert body["dataset_name"] == "dataset-a"
         assert body["dataset_path"] == "obs://bucket/ds/"
-        assert body["robot_config"] == "obs://bucket/rb/"
+        # robot_config 已废弃（改为 inputs 挂载配置），历史任务中的值不再带入复制请求
+        assert "robot_config" not in body
         assert body["worker_spec"] == {"cpu": 2, "memory": 4}
         # 运行态字段不应带入请求体
         assert "id" not in body
@@ -259,3 +260,19 @@ class TestTaskConfigValidation:
         config = _make_valid_proc_config()
         assert "description" not in config
         _validate_task_config(config, task_type="proc")
+
+    def test_eval_config_without_robot_config_passes(self):
+        config = {
+            "name": "eval-task",
+            "algo_id": "algo1",
+            "algo_name": "eval-algo",
+            "algo_entrance": "bash entrypoint.sh",
+            "image": "swr.example/eval:1.0",
+            "dataset_type": "BUILD_IN_ASSET",
+            "dataset_id": "ds1",
+            "dataset_name": "dataset-a",
+            "dataset_path": "obs://bucket/ds/",
+            "resource_pool_type": "PUBLIC_POOL",
+            "worker_spec": {"cpu": 2, "memory": 4},
+        }
+        _validate_task_config(config, task_type="eval")

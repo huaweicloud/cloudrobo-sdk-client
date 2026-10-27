@@ -71,7 +71,7 @@ cloudrobo dataset eval create-task --name <name> --task-config <json> [--workspa
 | `dataset_name` | string | 是 | 数据集名称 |
 | `dataset_path` | string | 是 | 数据集OBS路径，如 `obs://bucket/path/` |
 | `image` | string | 是 | 容器镜像地址 |
-| `robot_config` | string | 是 | 机器人配置OBS路径，如 `obs://bucket/path/` |
+| `inputs` | string | 否 | 配置文件挂载，JSON 数组字符串。元素取自算子 `ext_metadata.inputs`，仅将 `url_path` 设为 OBS 目录（如机器人描述 `ROBOT_CONFIG_PATH`）；不需要自定义配置时省略 |
 | `worker_spec` | object | 是 | worker规格，如 `{"cpu":2,"memory":4}` |
 | `resource_pool_type` | string | 是 | 资源池类型（PUBLIC_POOL / DEDICATED_POOL） |
 | `description` | string | 否 | 任务描述 |
@@ -89,7 +89,6 @@ cloudrobo dataset eval create-task \
     "dataset_name": "jaka_place_block_into_tray_sim_50",
     "dataset_path": "obs://<bucket-name>/workspace-test/dataset/jaka_place_block_into_tray_sim_50/",
     "image": "<image-url>",
-    "robot_config": "obs://<bucket-name>/workspace-test/dataset/jaka/",
     "worker_spec": {"cpu": 2, "memory": 4},
     "resource_pool_type": "PUBLIC_POOL",
     "description": "评测测试"
