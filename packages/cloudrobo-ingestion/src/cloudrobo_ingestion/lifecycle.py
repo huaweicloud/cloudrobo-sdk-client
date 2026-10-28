@@ -31,7 +31,7 @@ def private_dir(path):
 
 
 def write_json(path, value):
-    """Atomic status/handshake replacement, no credentials in payload."""
+    """Atomically replace JSON using a temporary file with mode 0600."""
     path = Path(path)
     fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:
@@ -149,17 +149,17 @@ def start(config_path, overrides=None):
     private_dir(runtime_dir())
     private_dir(config.work_dir)
     # Serialize competing start commands independently of the daemon lock.
-    with InstanceLock(runtime_dir() / "start.lock"):
+    with InstanceLock(runtime_dir() / "start.lock"), tempfile.TemporaryDirectory(
+        prefix="startup-", dir=config.work_dir
+    ) as startup_dir:
         if running():
             raise RuntimeError("已有回流进程正在运行")
         check_mode(config)
-        handshake = config.work_dir / ("startup-" + os.urandom(8).hex() + ".json")
+        handshake = Path(startup_dir) / "handshake.json"
+        effective = Path(startup_dir) / "effective.json"
         # Pass the validated effective configuration rather than re-reading the
         # original YAML in the child (which would lose CLI overrides).
-        fd, name = tempfile.mkstemp(prefix="effective-", suffix=".json", dir=config.work_dir)
-        effective = Path(name)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(config.to_mapping(), f, ensure_ascii=False)
+        write_json(effective, config.to_mapping())
         command = [
             sys.executable,
             "-m",
@@ -180,36 +180,28 @@ def start(config_path, overrides=None):
             )
         else:
             kwargs["start_new_session"] = True
-        try:
-            process = subprocess.Popen(command, **kwargs)
-        except Exception:
-            effective.unlink(missing_ok=True)
-            raise
+        process = subprocess.Popen(command, **kwargs)
         deadline = time.monotonic() + 20
-        try:
-            while time.monotonic() < deadline:
-                if handshake.exists():
-                    result = json.loads(handshake.read_text(encoding="utf-8"))
-                    if result.get("error"):
-                        if result.get("error_info"):
-                            from .diagnostics import DiagnosticError
+        while time.monotonic() < deadline:
+            if handshake.exists():
+                result = json.loads(handshake.read_text(encoding="utf-8"))
+                if result.get("error"):
+                    if result.get("error_info"):
+                        from .diagnostics import DiagnosticError
 
-                            raise DiagnosticError(result["error_info"])
-                        raise RuntimeError(result["error"])
-                    return result
-                if process.poll() is not None:
-                    raise RuntimeError("后台进程启动失败，请查看工作目录 ingestion.log")
-                time.sleep(0.1)
-            process.terminate()
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            raise RuntimeError("后台进程启动超时")
-        finally:
-            handshake.unlink(missing_ok=True)
-            effective.unlink(missing_ok=True)
+                        raise DiagnosticError(result["error_info"])
+                    raise RuntimeError(result["error"])
+                return result
+            if process.poll() is not None:
+                raise RuntimeError("后台进程启动失败，请查看工作目录 ingestion.log")
+            time.sleep(0.1)
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise RuntimeError("后台进程启动超时")
 
 
 def stop(timeout=15):

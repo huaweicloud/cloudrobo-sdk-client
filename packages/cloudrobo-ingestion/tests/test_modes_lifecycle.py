@@ -65,9 +65,9 @@ def test_real_child_receives_effective_cli_configuration(
         state = wait_for(lambda: status() if status().get("run_mode") == run_mode else None)
         assert state["work_dir"] == str(work) and state["running"]
         assert state["reporter"]["enabled"] is (run_mode == "upload_and_report")
-        if run_mode == "upload_only":
-            assert not list(work.glob("zenoh-*.yaml"))
+        assert not list(work.glob("zenoh-*"))
         assert not list(work.glob("effective-*.json"))
+        assert not list(work.glob("startup-*"))
         assert stop()["run_mode"] == run_mode
         assert not running()
     finally:

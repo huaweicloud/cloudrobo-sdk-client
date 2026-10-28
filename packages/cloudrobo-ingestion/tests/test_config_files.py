@@ -1,4 +1,6 @@
 import builtins
+import os
+import stat
 import threading
 
 import pytest
@@ -64,6 +66,25 @@ def test_manifest_checked_copy_is_read_only(config, batch_dir):
     assert before == {
         p.relative_to(batch_dir): p.read_bytes() for p in batch_dir.rglob("*") if p.is_file()
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
+def test_checked_copy_creates_private_files_with_permissive_umask(config, batch_dir):
+    entries = manifest(batch_dir)
+    source = batch_dir / entries[0].path
+    source.chmod(0o644)
+    target = config.work_dir / "staged"
+    previous_umask = os.umask(0)
+    try:
+        checked_copy(batch_dir, target, entries, threading.Event())
+    finally:
+        os.umask(previous_umask)
+    copied = target / entries[0].path
+    assert copied.read_bytes() == source.read_bytes()
+    assert stat.S_IMODE(copied.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.stat().st_mode) == 0o700
+    assert stat.S_IMODE(copied.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(source.stat().st_mode) == 0o644
 
 
 @pytest.mark.parametrize("limit", [50, 2, 5001])

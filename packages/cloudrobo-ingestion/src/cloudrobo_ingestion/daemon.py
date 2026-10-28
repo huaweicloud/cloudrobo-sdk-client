@@ -776,7 +776,6 @@ class Supervisor:
 def main(config_path, handshake, effective_path=None):
     root = runtime_dir()
     private_dir(root)
-    z_path = None
     supervisor = listener = None
     config = None
     stage = "config"
@@ -825,21 +824,26 @@ def main(config_path, handshake, effective_path=None):
                 from cloudrobo_r2c.transport import ZenohTransport
 
                 del ZenohTransport
-                fd, name = tempfile.mkstemp(prefix="zenoh-", suffix=".yaml", dir=config.work_dir)
-                z_path = Path(name)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    z = dict(config.zenoh)
-                    z.setdefault("publisher_priority", "BACKGROUND")
-                    z.setdefault("publisher_congestion_control", "DROP")
-                    z.setdefault(
-                        "connect",
-                        dict(endpoints=z["endpoints"], timeout_ms=2000, exit_on_failure=True),
-                    )
-                    yaml.safe_dump(z, f, allow_unicode=True)
-                ClientConfig.from_yaml(z_path, None, None, None).validate()
+                with tempfile.TemporaryDirectory(prefix="zenoh-", dir=config.work_dir) as z_dir:
+                    z_path = Path(z_dir) / "config.yaml"
+                    fd = os.open(z_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        z = dict(config.zenoh)
+                        z.setdefault("publisher_priority", "BACKGROUND")
+                        z.setdefault("publisher_congestion_control", "DROP")
+                        z.setdefault(
+                            "connect",
+                            dict(endpoints=z["endpoints"], timeout_ms=2000, exit_on_failure=True),
+                        )
+                        yaml.safe_dump(z, f, allow_unicode=True)
+                    zenoh_config = ClientConfig.from_yaml(z_path, None, None, None)
+                    zenoh_config.validate()
+                # Reconnect from the loaded configuration, so the temporary YAML
+                # is no longer needed while the daemon is running.
                 reporter = Reporter(
-                    z_path,
+                    None,
                     config.topic,
+                    factory=lambda _: Reporter.connect_transport(zenoh_config),
                     endpoints=config.zenoh.get("connect", {}).get(
                         "endpoints", config.zenoh["endpoints"]
                     ),
@@ -924,15 +928,6 @@ def main(config_path, handshake, effective_path=None):
                 listener.close()
             except OSError as exc:
                 log_error(logger, make_error("local", "control", exc), logging.WARNING)
-        if z_path:
-            try:
-                z_path.unlink(missing_ok=True)
-            except OSError as exc:
-                log_error(
-                    logger,
-                    make_error("local", "cleanup", exc, context=dict(path=str(z_path))),
-                    logging.WARNING,
-                )
 
 
 if __name__ == "__main__":

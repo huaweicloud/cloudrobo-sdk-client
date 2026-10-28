@@ -94,17 +94,24 @@ def checked_copy(
     stop,
     max_files: int = DEFAULT_MAX_FILES_PER_BATCH,
 ) -> None:
-    target.mkdir(parents=True, exist_ok=False)
+    target.mkdir(parents=True, exist_ok=False, mode=0o700)
     for entry in entries:
         if stop.is_set():
             raise InterruptedBatch()
         src, dest = source / entry.path, target / entry.path
         if is_link(src):
             raise RejectedBatch(f"复制时发现链接: {entry.path}")
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Opening through O_NOFOLLOW prevents replacing the final source file with a link.
-        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(fd, "rb") as f, dest.open("xb") as out:
+        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "rb") as f, os.fdopen(
+            os.open(
+                dest,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+                0o600,
+            ),
+            "wb",
+        ) as out:
             s = os.fstat(f.fileno())
             if (s.st_size, s.st_mtime_ns, s.st_ino) != (entry.size, entry.mtime_ns, entry.inode):
                 raise RejectedBatch(f"源文件已变化: {entry.path}")
