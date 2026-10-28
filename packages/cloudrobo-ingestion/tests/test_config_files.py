@@ -1,6 +1,8 @@
 import builtins
 import os
 import stat
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -66,6 +68,53 @@ def test_manifest_checked_copy_is_read_only(config, batch_dir):
     assert before == {
         p.relative_to(batch_dir): p.read_bytes() for p in batch_dir.rglob("*") if p.is_file()
     }
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not describe Windows ACLs")
+def test_copy_permissions_are_private_even_with_permissive_umask(config, batch_dir):
+    source = batch_dir / "data/file-000.parquet"
+    before = source.stat()
+    target = config.work_dir / "private-copy"
+    # Change umask only in a child process so other test threads are unaffected.
+    script = """
+import os
+import sys
+import threading
+from pathlib import Path
+from cloudrobo_ingestion.filesystem import checked_copy, manifest
+os.umask(0)
+source, target = map(Path, sys.argv[1:])
+checked_copy(source, target, manifest(source), threading.Event())
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(batch_dir), str(target)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert stat.S_IMODE(target.stat().st_mode) == 0o700
+    assert stat.S_IMODE((target / "data").stat().st_mode) == 0o700
+    copy = target / "data/file-000.parquet"
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o600
+    assert copy.read_bytes() == source.read_bytes()
+    after = source.stat()
+    assert (after.st_mode, after.st_mtime_ns) == (before.st_mode, before.st_mtime_ns)
+
+
+def test_windows_acl_query_exposes_powershell_error(tmp_path, monkeypatch):
+    import test_windows_permissions
+
+    monkeypatch.setattr(test_windows_permissions.shutil, "which", lambda _: "powershell.exe")
+    monkeypatch.setenv("PSModulePath", "incompatible-powershell-7-modules")
+    monkeypatch.setenv("PSMODULEPATH", "incompatible-uppercase-module-path")
+
+    def failed_query(command, **kwargs):
+        assert not any(key.casefold() == "psmodulepath" for key in kwargs["env"])
+        raise subprocess.CalledProcessError(1, command, stderr="ACL query: access denied")
+
+    monkeypatch.setattr(test_windows_permissions.subprocess, "run", failed_query)
+    with pytest.raises(RuntimeError, match="PowerShell ACL query failed: ACL query: access denied"):
+        test_windows_permissions._read_acls([tmp_path])
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")

@@ -17,6 +17,21 @@ from .store import now_ms
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ResultToken:
+    version: str
+    send_round: int
+
+
+@dataclass(frozen=True)
+class PublishReceipt:
+    batch_id: str
+    payload: bytes
+    token: ResultToken
+    completed_at: float
+    duration_ms: float
+
+
 def message_class():
     from cloudrobo_r2c.common.models.generated.data_upload_progress_pb2 import DataUploadProgress
 
@@ -177,12 +192,20 @@ class BatchProgress:
 class Reporter:
     """One slot per batch. Never run transport calls in the upload/control loop."""
 
-    def __init__(self, config_path, topic, factory=None, interval=1.0, endpoints=None):
+    def __init__(self, config_path, topic, factory=None, interval=1.0, endpoints=None, clock=None):
         self.config_path, self.topic, self.interval = config_path, topic, interval
         self.factory = factory or self._transport
         self.lock = threading.Lock()
         self.slots = {}
         self.expirations = {}
+        self.tokens = {}
+        self.clock = clock or time.monotonic
+        self.min_publish_gap = (
+            0.0  # Customer supervisor enables pacing; Mock keeps its script pace.
+        )
+        self.last_started = {}
+        self.last_publish = float("-inf")
+        self.serialization_retry = {}
         self.acks = queue.Queue()
         self.stop_event = threading.Event()
         self.wake = threading.Event()
@@ -222,16 +245,19 @@ class Reporter:
             raise DiagnosticError(info) from exc
         return t
 
-    def set(self, batch_id, snapshot, terminal=False, expires_at_ms=0):
+    def set(self, batch_id, snapshot, terminal=False, expires_at_ms=0, token=None):
         with self.lock:
             self.slots[batch_id] = (snapshot, terminal)
             self.expirations[batch_id] = expires_at_ms
+            self.tokens[batch_id] = token
         self.wake.set()
 
     def remove(self, batch_id):
         with self.lock:
             self.slots.pop(batch_id, None)
             self.expirations.pop(batch_id, None)
+            self.tokens.pop(batch_id, None)
+            self.serialization_retry.pop(batch_id, None)
             tracker = self.serialization_errors.pop(batch_id, None)
             if tracker:
                 tracker.recovered()
@@ -261,72 +287,103 @@ class Reporter:
                 errors=errors,
             )
 
+    def _ready(self, now) -> list[tuple]:
+        """Return up to one eligible slot; waking never changes the due time."""
+        selected = []
+        with self.lock:
+            self.last_started = {
+                key: at for key, at in self.last_started.items() if now - at < self.interval
+            }
+            due = []
+            for batch_id, slot in self.slots.items():
+                expiry = self.expirations.get(batch_id, 0)
+                if expiry and now_ms() >= expiry:
+                    continue
+                at = max(
+                    self.last_started.get(batch_id, float("-inf")) + self.interval,
+                    self.serialization_retry.get(batch_id, float("-inf")),
+                    self.last_publish + self.min_publish_gap,
+                )
+                if at <= now:
+                    due.append((slot[1], at, batch_id, slot, self.tokens.get(batch_id)))
+            if due:
+                _, _, batch_id, slot, token = min(due, key=lambda item: item[:2])
+                selected.append((batch_id, slot, token))
+        return selected
+
     def _run(self):
         transport = None
-        next_tick, retry_at = 0.0, 0.0
+        retry_at = 0.0
         try:
             while not self.stop_event.is_set():
-                now = time.monotonic()
-                triggered = self.wake.is_set()
-                if now < retry_at or (not triggered and now < next_tick):
-                    self.stop_event.wait(min(0.1, max(retry_at, next_tick) - now))
-                    continue
                 self.wake.clear()
-                next_tick = now + self.interval
-                with self.lock:
-                    slots = dict(self.slots)
-                if not slots:
-                    self.stop_event.wait(0.1)
+                now = self.clock()
+                ready = self._ready(now) if now >= retry_at else []
+                if not ready:
+                    self.wake.wait(0.02)
                     continue
-                payloads = []
-                for batch_id, slot in slots.items():
-                    if not self._publishable(batch_id, slot):
-                        continue
-                    snapshot, terminal = slot
-                    try:
-                        payload = snapshot if isinstance(snapshot, bytes) else snapshot.serialize()
-                        payloads.append((batch_id, slot, payload, terminal))
-                        with self.lock:
-                            tracker = self.serialization_errors.pop(batch_id, None)
-                            if tracker:
-                                tracker.recovered()
-                    except Exception as exc:
-                        info = make_error(
-                            "local",
-                            "serialize",
-                            exc,
-                            context=dict(batch_id=batch_id, topic=self.topic),
-                        )
-                        with self.lock:
-                            # An obsolete snapshot must not resurrect a removed error.
-                            if self.slots.get(batch_id) is slot:
-                                self.serialization_errors.setdefault(
-                                    batch_id, ErrorTracker(logger)
-                                ).failed(info)
-                if not payloads:
+                batch_id, slot, token = ready[0]
+                if not self._publishable(batch_id, slot):
+                    self.wake.wait(0.02)
+                    continue
+                snapshot, terminal = slot
+                try:
+                    payload = snapshot if isinstance(snapshot, bytes) else snapshot.serialize()
+                    with self.lock:
+                        self.serialization_retry.pop(batch_id, None)
+                        tracker = self.serialization_errors.pop(batch_id, None)
+                        if tracker:
+                            tracker.recovered()
+                except Exception as exc:
+                    info = make_error(
+                        "local", "serialize", exc, context=dict(batch_id=batch_id, topic=self.topic)
+                    )
+                    with self.lock:
+                        if self.slots.get(batch_id) is slot:
+                            self.serialization_errors.setdefault(
+                                batch_id, ErrorTracker(logger)
+                            ).failed(info)
+                            self.serialization_retry[batch_id] = self.clock() + self.interval
                     continue
                 stage = "connect"
                 try:
                     if transport is None:
                         transport = self.factory(self.config_path)
                     stage = "publish"
-                    for batch_id, slot, payload, terminal in payloads:
-                        if self.stop_event.is_set():
-                            break
-                        connection_info = getattr(transport, "connection_info", lambda: None)()
-                        if connection_info and connection_info.get("connected") is False:
-                            raise ConnectionError("Zenoh link disconnected")
-                        # Connecting/retrying may have crossed the expiry boundary.
-                        if not self._publishable(batch_id, slot):
-                            continue
-                        transport.publish(self.topic, payload)
-                        with self.lock:
-                            self.errors.recovered()
-                            self.status.update(connected=True, last_published_ms=now_ms(), error="")
-                            if terminal and self.slots.get(batch_id) is slot:
-                                self.slots.pop(batch_id)
-                                self.expirations.pop(batch_id, None)
-                        self.acks.put((batch_id, payload))
+                    if self.stop_event.is_set():
+                        break
+                    connection_info = getattr(transport, "connection_info", lambda: None)()
+                    if connection_info and connection_info.get("connected") is False:
+                        raise ConnectionError("Zenoh link disconnected")
+                    if not self._publishable(batch_id, slot):
+                        continue
+                    started = self.clock()
+                    with self.lock:
+                        self.last_started[batch_id] = self.last_publish = started
+                    if token is not None:
+                        logger.info(
+                            "发布结果 batch_id=%s version=%s round=%s bytes=%s",
+                            batch_id,
+                            token.version,
+                            token.send_round,
+                            len(payload),
+                        )
+                    transport.publish(self.topic, payload)
+                    completed = self.clock()
+                    with self.lock:
+                        self.errors.recovered()
+                        self.status.update(connected=True, last_published_ms=now_ms(), error="")
+                        if terminal and self.slots.get(batch_id) is slot:
+                            self.slots.pop(batch_id)
+                            self.expirations.pop(batch_id, None)
+                            self.tokens.pop(batch_id, None)
+                    self.acks.put(
+                        PublishReceipt(
+                            batch_id, payload, token, completed, (completed - started) * 1000
+                        )
+                        if token is not None
+                        else (batch_id, payload)
+                    )
                     retry_at = 0
                 except Exception as exc:
                     info = (
@@ -339,11 +396,21 @@ class Reporter:
                             diagnostic=getattr(transport, "connection_info", lambda: {})()
                             if transport
                             else None,
-                            context=dict(endpoints=self.endpoints, topic=self.topic),
+                            context=dict(
+                                endpoints=self.endpoints,
+                                topic=self.topic,
+                                batch_id=batch_id,
+                                result_version=token.version if token else None,
+                                result_round=token.send_round if token else None,
+                            ),
                         )
                     )
                     info["context"].setdefault("topic", self.topic)
                     info["context"].setdefault("endpoints", self.endpoints)
+                    info["context"].setdefault("batch_id", batch_id)
+                    if token is not None:
+                        info["context"].setdefault("result_version", token.version)
+                        info["context"].setdefault("result_round", token.send_round)
                     with self.lock:
                         self.errors.failed(info)
                         self.status.update(connected=False)
@@ -355,7 +422,7 @@ class Reporter:
                                 logger, make_error("report", "close", close_exc), logging.WARNING
                             )
                     transport = None
-                    retry_at = time.monotonic() + 2
+                    retry_at = self.clock() + 2
         except Exception as exc:
             with self.lock:
                 self.status.update(connected=False)
@@ -374,6 +441,7 @@ class Reporter:
 
     def close(self):
         self.stop_event.set()
+        self.wake.set()
         self.thread.join(timeout=2)
 
 

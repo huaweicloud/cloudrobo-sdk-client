@@ -1,4 +1,4 @@
-"""Only upload_only completion backfills expire, using stable first enqueue time."""
+"""All retained terminal results expire using stable first enqueue time."""
 
 import shutil
 import time
@@ -169,7 +169,9 @@ def test_reporter_checks_expiry_again_after_connect_without_acknowledging_it(clo
 
 
 @pytest.mark.parametrize("completed", [False, True])
-def test_normal_mode_reporting_is_not_limited_by_backfill_ttl(config, batch_dir, clock, completed):
+def test_normal_mode_terminal_results_expire_but_unfinished_batches_can_continue(
+    config, batch_dir, clock, completed
+):
     original = supervisor(config)
     try:
         if completed:
@@ -177,7 +179,7 @@ def test_normal_mode_reporting_is_not_limited_by_backfill_ttl(config, batch_dir,
         else:
             original.scan()
             row = original.store.rows()[0]
-        assert row["report_expires_ms"] == 0
+        assert row["report_expires_ms"] == (row["timestamp"] + DAY if completed else 0)
     finally:
         original.store.close()
     clock[0] = row["timestamp"] + 2 * DAY
@@ -185,13 +187,16 @@ def test_normal_mode_reporting_is_not_limited_by_backfill_ttl(config, batch_dir,
     try:
         restored.initialize()
         restored.scan()
-        assert row["id"] in restored.reporter.slots
+        assert row["id"] not in restored.reporter.slots
+        assert restored.store.get(row["id"])["final_snapshot"] is None
+        if not completed:
+            assert row["id"] in restored.progress  # Still eligible for real upload.
     finally:
         restored.store.close()
 
 
 @pytest.mark.parametrize("mode", ["upload_only", "upload_and_report"])
-def test_existing_database_keeps_history_and_assigns_ttl_only_to_deferred_snapshots(
+def test_existing_database_keeps_history_and_assigns_ttl_to_all_retained_results(
     config, batch_dir, clock, mode
 ):
     original = enroll(config)
@@ -208,11 +213,8 @@ def test_existing_database_keeps_history_and_assigns_ttl_only_to_deferred_snapsh
         restored.initialize()
         row = restored.store.get(done["id"])
         assert row["state"] == "done" and row["attempts"] == 1
-        if mode == "upload_only":
-            assert row["report_expires_ms"] == original["timestamp"] + DAY
-            assert row["pending"] is row["final_snapshot"] is None
-            assert not restored.reporter.slots
-        else:
-            assert row["report_expires_ms"] == 0 and restored.reporter.slots
+        assert row["report_expires_ms"] == original["timestamp"] + DAY
+        assert row["pending"] is row["final_snapshot"] is None
+        assert not restored.reporter.slots
     finally:
         restored.store.close()

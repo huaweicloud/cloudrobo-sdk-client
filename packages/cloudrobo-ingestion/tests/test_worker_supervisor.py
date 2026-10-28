@@ -9,6 +9,7 @@ from cloudrobo_ingestion.filesystem import checked_copy, manifest
 from cloudrobo_ingestion.progress import Reporter, message_class
 from cloudrobo_ingestion.store import BatchStore
 from cloudrobo_ingestion.worker import run_worker
+from delivery_helpers import complete_result
 
 
 class Connection:
@@ -321,8 +322,7 @@ def test_recovery_preserves_committed_success_before_cleanup_and_report(config, 
         assert restored["timestamp"] == batch["timestamp"]
         assert not restored["cleanup_pending"]
         assert reporter.slots[batch["id"]] == (payload, True)
-        reporter.acks.put((batch["id"], payload))
-        s.drain()
+        complete_result(s, batch["id"])
         restored = s.store.get(batch["id"])
         assert restored["pending"] is restored["final_snapshot"] is None
         assert restored["state"] == "done" and not reporter.slots

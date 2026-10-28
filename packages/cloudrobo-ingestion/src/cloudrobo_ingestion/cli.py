@@ -106,6 +106,7 @@ def status(as_json):
     click.echo(
         f"上报状态: {'未启用' if not reporter.get('enabled', True) else '连接正常（仅本地调用）' if reporter.get('connected') else '未连接'}"
     )
+    click.echo(f"等待结果补发批次: {reporter.get('pending_result_batches', 0)}")
     shown = set()
     for item in result.get("batch_errors", []):
         if item.get("error_info"):

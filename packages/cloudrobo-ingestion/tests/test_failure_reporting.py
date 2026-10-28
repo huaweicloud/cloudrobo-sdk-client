@@ -94,10 +94,14 @@ def test_failed_state_is_published_before_retry_and_survives_preparation(config,
         s.store.update(batch["id"], retry_at=0)
         s.worker_target = gated_retry_child
         s.launch_next()
-        # During recopy/initialization, every published snapshot stays [done, failed, failed].
+        # Recopy/initialization has no periodic messages; retry cancels old result rounds.
         index = len(messages)
-        pump(s, lambda: len(messages) >= index + 2)
-        assert all(states(m) == [2, 3, 3] for m in messages[index:])
+        end = time.monotonic() + 0.15
+        while time.monotonic() < end:
+            s.drain()
+            time.sleep(0.01)
+        assert len(messages) == index
+        assert not s.reporter.slots
         (config.work_dir / "copy-ready").touch()
         for i, expected in enumerate(([1, 3, 3], [2, 1, 3], [2, 2, 1])):
             index = len(messages)
@@ -165,7 +169,7 @@ def test_worker_start_failure_reports_known_files(config, batch_dir, monkeypatch
         assert batch["state"] == "failed"
         assert batch["error_info"]["stage"] == "worker_start"
         snapshot, terminal = reporter.slots[batch["id"]]
-        assert states(message_class().FromString(snapshot.serialize())) == [3]
-        assert not terminal and s.process is None
+        assert states(message_class().FromString(snapshot)) == [3]
+        assert terminal and s.process is None
     finally:
         s.store.close()

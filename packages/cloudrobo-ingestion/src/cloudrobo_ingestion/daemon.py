@@ -10,6 +10,7 @@ import logging
 import multiprocessing
 import os
 import queue
+import random
 import signal
 import sqlite3
 import sys
@@ -26,16 +27,24 @@ from .config import IngestionConfig
 from .diagnostics import DiagnosticError, ErrorTracker, log_error, make_error, summary
 from .filesystem import RejectedBatch, remove_staging
 from .lifecycle import InstanceLock, private_dir, runtime_dir, write_json
-from .progress import BatchProgress, DisabledReporter, Reporter, message_class, serialize_snapshot
+from .progress import (
+    BatchProgress,
+    DisabledReporter,
+    PublishReceipt,
+    Reporter,
+    ResultToken,
+    message_class,
+    serialize_snapshot,
+)
 from .scanner import MANIFEST_WINDOW, SCAN_QUEUE_SIZE, ScanWorker
-from .store import DEFERRED_REPORT_TTL_MS, BatchStore, now_ms
+from .store import BatchStore, now_ms, result_send_limit
 from .worker import run_worker
 
 logger = logging.getLogger(__name__)
 
 
 class Supervisor:
-    def __init__(self, config, reporter, status_path, worker_target=run_worker):
+    def __init__(self, config, reporter, status_path, worker_target=run_worker, *, clock=None):
         self.config, self.reporter, self.status_path = config, reporter, status_path
         self.worker_target = worker_target
         for name in ("staging", "checkpoints"):
@@ -60,6 +69,13 @@ class Supervisor:
         self.preparing = {}
         self.launch_ready = None
         self.outbox_id = self.outbox_cursor = None
+        self.outbox_token = None
+        self.clock = clock or time.monotonic
+        self.schedule_epoch_ms = now_ms()
+        self.schedule_started = self.clock()
+        self.result_delay = lambda: random.uniform(1, 5)
+        if config.reports and isinstance(reporter, Reporter):
+            self.reporter.min_publish_gap = min(0.2, self.reporter.interval / 5)
         self.scan_rounds = 0
         self.scan_status = dict(state="idle", last_completed_ms=0, checked_dirs=0)
         self.scan_errors = collections.OrderedDict()
@@ -81,18 +97,29 @@ class Supervisor:
         progress = self.progress.get(batch_id)
         if progress is None or progress.finished:
             return
+        self._stop_periodic(batch_id)
         progress.mark_failed()
-        # Wake the publisher before persisting; a DB fault must not hide failure.
-        self.reporter.set(batch_id, progress)
         if self.config.reports:
-            try:
-                payload = progress.serialize()
-            except Exception as exc:
-                log_error(
-                    logger, make_error("local", "serialize", exc, context=dict(batch_id=batch_id))
-                )
-            else:
-                self.store.update(batch_id, pending=payload)
+            self.expire_reports()
+            self.store.save_result(batch_id, progress.snapshot(), "failure")
+            self.queue_final(self.store.get(batch_id))
+
+    def _stop_periodic(self, batch_id):
+        if batch_id != self.outbox_id:
+            self.reporter.remove(batch_id)
+
+    def _cancel_result(self, batch_id, reason):
+        if self.outbox_id == batch_id:
+            self.reporter.remove(batch_id)
+            self.outbox_id = self.outbox_token = None
+        self.store.cancel_result(batch_id, reason=reason)
+        tracker = self.final_errors.pop(batch_id, None)
+        if tracker:
+            tracker.recovered()
+
+    def _schedule_ms(self, at=None):
+        at = self.clock() if at is None else at
+        return self.schedule_epoch_ms + int((at - self.schedule_started) * 1000)
 
     def batch_failure(self, batch, stage, exc, **updates):
         self.batch_error(
@@ -144,14 +171,31 @@ class Supervisor:
 
     def queue_final(self, batch):
         """Materialize the durable final result only when reporting is enabled."""
-        if not self.config.reports:
+        if not self.config.reports or self.stop_event.is_set():
+            return
+        if batch["pending"] is None and batch["final_snapshot"] is None:
+            return
+        if batch["report_count"] >= result_send_limit(batch["report_kind"]):
+            self.store.update(batch["id"], pending=None, final_snapshot=None, report_next_ms=0)
             return
         if batch["report_expires_ms"] and now_ms() >= batch["report_expires_ms"]:
             self.expire_reports()
             return
         batch_id = batch["id"]
-        if self.outbox_id not in (None, batch_id):
+        if self.outbox_id is not None or batch["report_next_ms"] > self._schedule_ms():
             return
+        if not batch["report_version"]:
+            # Also supports retained results materialized by older callers.
+            self.store.update(
+                batch_id,
+                report_version=os.urandom(16).hex(),
+                report_kind="success" if batch["state"] == "done" else "failure",
+                report_expires_ms=batch["timestamp"] + 24 * 60 * 60 * 1000,
+            )
+            batch = self.store.get(batch_id)
+            if now_ms() >= batch["report_expires_ms"]:
+                self.expire_reports()
+                return
         try:
             payload = batch["pending"]
             if payload is None:
@@ -166,45 +210,42 @@ class Supervisor:
             self.final_errors.setdefault(batch_id, ErrorTracker(logger)).failed(
                 make_error("local", "serialize", exc, context=dict(batch_id=batch_id))
             )
+            self.store.update(batch_id, report_next_ms=self._schedule_ms() + 1000)
             return
         tracker = self.final_errors.pop(batch_id, None)
         if tracker:
             tracker.recovered()
-        self.reporter.set(
-            batch_id, payload, terminal=True, expires_at_ms=batch["report_expires_ms"]
-        )
         self.outbox_id = batch_id
+        self.outbox_token = ResultToken(batch["report_version"], batch["report_count"] + 1)
+        self.reporter.set(
+            batch_id,
+            payload,
+            terminal=True,
+            expires_at_ms=batch["report_expires_ms"],
+            token=self.outbox_token,
+        )
 
     def _fill_outbox(self):
-        if not self.config.reports:
+        if not self.config.reports or self.stop_event.is_set():
             return
-        if self.outbox_id is not None and self.reporter.contains(self.outbox_id):
+        # A successful publisher removes its slot before the main thread sees
+        # the receipt. Keep the round in flight until that receipt is consumed.
+        if self.outbox_id is not None:
             return
-        self.outbox_id = None
-        excluded = set(self.progress) | set(self.preparing)
-        batch = self.store.outbox_next(excluded, self.outbox_cursor)
+        batch = self.store.outbox_next(after=self.outbox_cursor, due_ms=self._schedule_ms())
         if batch is None and self.outbox_cursor is not None:
             self.outbox_cursor = None
-            batch = self.store.outbox_next(excluded)
+            batch = self.store.outbox_next(due_ms=self._schedule_ms())
         if batch is None:
             return
         self.outbox_cursor = (batch["timestamp"], batch["path"])
-        if batch["final_snapshot"] is not None:
-            self.queue_final(batch)
-        else:
-            self.reporter.set(
-                batch["id"],
-                batch["pending"],
-                terminal=True,
-                expires_at_ms=batch["report_expires_ms"],
-            )
-            self.outbox_id = batch["id"]
+        self.queue_final(batch)
 
     def expire_reports(self):
         for batch_id in self.store.expire_reports():
             self.reporter.remove(batch_id)
             if self.outbox_id == batch_id:
-                self.outbox_id = None
+                self.outbox_id = self.outbox_token = None
             tracker = self.final_errors.pop(batch_id, None)
             if tracker:
                 tracker.recovered()
@@ -331,7 +372,6 @@ class Supervisor:
             p.prepare(entries, failed=failed)
         self.progress[batch_id] = p
         self.store.update(batch_id, files=len(entries), bytes=sum(e.size for e in entries))
-        self.reporter.set(batch_id, p)
         if purpose == "launch":
             self.launch_ready = batch_id
 
@@ -343,7 +383,7 @@ class Supervisor:
         for old in list(self.progress):
             if old != self.active and old not in self.preparing:
                 self.progress.pop(old)
-                self.reporter.remove(old)
+                self._stop_periodic(old)
                 if self.launch_ready == old:
                     self.launch_ready = None
                 return True
@@ -353,9 +393,8 @@ class Supervisor:
         batch_id = batch["id"]
         if batch_id in self.preparing or not self._make_room(batch_id):
             return False
-        if self.outbox_id == batch_id:
-            self.reporter.remove(batch_id)
-            self.outbox_id = None
+        if purpose == "launch":
+            self._cancel_result(batch_id, "开始新的上传尝试")
         self.scanner.request_manifest(batch_id, batch["path"], purpose)
         self.preparing[batch_id] = purpose
         return True
@@ -381,7 +420,7 @@ class Supervisor:
                 if disposable is None:
                     break
                 self.progress.pop(disposable)
-                self.reporter.remove(disposable)
+                self._stop_periodic(disposable)
             self._request_manifest(batch, "prepare")
 
     @property
@@ -469,6 +508,8 @@ class Supervisor:
                             event["transferred"],
                             begin=event.get("begin", False),
                         )
+                        if event.get("begin") and self.config.reports:
+                            self.reporter.set(self.active, self.progress[self.active])
                     elif kind == "phase":
                         self.store.update(self.active, state=event["state"])
                     elif kind == "log":
@@ -536,19 +577,40 @@ class Supervisor:
         outbox_acked = False
         while True:
             try:
-                batch_id, payload = self.reporter.acks.get_nowait()
+                receipt = self.reporter.acks.get_nowait()
             except queue.Empty:
                 break
-            acknowledged = self.store.acknowledge(batch_id, payload)
-            if batch_id == self.outbox_id and acknowledged:
-                self.reporter.remove(batch_id)
-                self.outbox_id = None
+            if not isinstance(receipt, PublishReceipt):
+                # Progress receipts and Mock's legacy one-shot receipts do not
+                # count toward a versioned result's delivery budget.
+                continue
+            limit = result_send_limit(self.store.get(receipt.batch_id)["report_kind"])
+            next_ms = (
+                self._schedule_ms(receipt.completed_at) + int(self.result_delay() * 1000)
+                if receipt.token.send_round < limit
+                else 0
+            )
+            acknowledged = self.store.acknowledge_result(receipt, next_ms)
+            if acknowledged:
+                logger.info(
+                    "结果本地发布完成 batch_id=%s version=%s round=%s/%s bytes=%s duration_ms=%.2f next_ms=%s",
+                    receipt.batch_id,
+                    receipt.token.version,
+                    receipt.token.send_round,
+                    limit,
+                    len(receipt.payload),
+                    receipt.duration_ms,
+                    next_ms,
+                )
+            if receipt.batch_id == self.outbox_id and receipt.token == self.outbox_token:
+                self.reporter.remove(receipt.batch_id)
+                self.outbox_id = self.outbox_token = None
                 outbox_acked = True
         self._fill_window()
         if outbox_acked:
             self._fill_outbox()
         if self.config.reports and time.monotonic() >= self.next_final_retry:
-            self.next_final_retry = time.monotonic() + 1
+            self.next_final_retry = time.monotonic() + 0.05
             self.expire_reports()
             self._fill_outbox()
 
@@ -588,11 +650,11 @@ class Supervisor:
                 )
         else:
             state = result["state"]
+            self._stop_periodic(self.active)
             p = self.progress.get(self.active)
-            final_snapshot = None
             if p:
                 if state in ("failed", "rejected"):
-                    p.mark_failed()
+                    self.fail_progress(self.active)
                 else:
                     with p.lock:
                         p.finished = state == "done"
@@ -600,18 +662,6 @@ class Supervisor:
                             for node in p.nodes.values():
                                 if node.state == 1:
                                     node.state = 0
-                if state == "done" and batch["report_enabled"]:
-                    final_snapshot = p.snapshot()
-                try:
-                    payload = p.serialize() if self.config.reports and state != "done" else None
-                except Exception as exc:
-                    info = make_error("local", "serialize", exc, context=dict(batch_id=batch["id"]))
-                    log_error(logger, info)
-                    payload = None
-                    # Reporter owns serialization retries; upload outcome is unchanged.
-                    self.reporter.set(self.active, p, terminal=state == "done")
-            else:
-                payload = None
             delay = (
                 min(300, 5 * 2 ** min(max(batch["attempts"] - 1, 0), 6)) if state == "failed" else 0
             )
@@ -624,23 +674,16 @@ class Supervisor:
                 error=summary(info) if info else result.get("error", ""),
                 error_info=info,
                 retry_at=time.time() + delay,
-                pending=payload,
-                final_snapshot=final_snapshot,
-                report_expires_ms=(
-                    batch["timestamp"] + DEFERRED_REPORT_TTL_MS
-                    if final_snapshot is not None and not self.config.reports
-                    else 0
-                ),
             )
-            if not self.config.reports:
-                self.expire_reports()
-            if final_snapshot is not None:
-                self.reporter.remove(self.active)
-                self.queue_final(self.store.get(self.active))
-            elif payload is not None:
-                self.reporter.set(
-                    self.active, payload if state == "done" else p, terminal=state == "done"
-                )
+            if state == "done":
+                self._stop_periodic(self.active)
+                self._cancel_result(self.active, "本次上传成功，替代旧结果")
+                if p and batch["report_enabled"]:
+                    self.store.save_result(self.active, p.snapshot(), "success")
+                    self.queue_final(self.store.get(self.active))
+            elif state == "interrupted":
+                self._stop_periodic(self.active)
+                self._cancel_result(self.active, "用户停止，未完成批次下次重新处理")
             if state == "done":
                 if batch.get("error_info"):
                     logger.info("异常已恢复：%s", summary(batch["error_info"]))
@@ -688,7 +731,10 @@ class Supervisor:
             progress=self.progress[self.active].summary() if self.active in self.progress else {},
             error=summary(current) if current else "",
             error_info=current,
-            reporter=self.reporter.diagnostics(),
+            reporter=dict(
+                self.reporter.diagnostics(),
+                pending_result_batches=self.store.pending_results(),
+            ),
             batch_errors=batch_errors[-50:],
             scan=dict(
                 self.scan_status,
@@ -743,7 +789,7 @@ class Supervisor:
                 )
             )
             log_error(logger, self.error_info)
-            for batch_id in self.progress:
+            for batch_id in [self.active] if self.active in self.progress else []:
                 with contextlib.suppress(Exception):
                     self.fail_progress(batch_id)
             raise DiagnosticError(self.error_info) from exc

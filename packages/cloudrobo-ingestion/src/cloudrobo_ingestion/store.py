@@ -10,6 +10,11 @@ import uuid
 
 logger = logging.getLogger(__name__)
 DEFERRED_REPORT_TTL_MS = 24 * 60 * 60 * 1000
+RESULT_SEND_COUNT = 3
+
+
+def result_send_limit(kind):
+    return 1 if kind == "failure" else RESULT_SEND_COUNT
 
 
 def now_ms():
@@ -37,6 +42,10 @@ class BatchStore:
                 cleanup_pending INTEGER NOT NULL DEFAULT 0, pending BLOB,
                 report_enabled INTEGER NOT NULL DEFAULT 0, final_snapshot TEXT,
                 report_expires_ms INTEGER NOT NULL DEFAULT 0,
+                report_version TEXT NOT NULL DEFAULT '',
+                report_kind TEXT NOT NULL DEFAULT '',
+                report_count INTEGER NOT NULL DEFAULT 0,
+                report_next_ms INTEGER NOT NULL DEFAULT 0,
                 files INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS batches_order ON batches(timestamp,path);
@@ -49,21 +58,46 @@ class BatchStore:
             self.db.close()
             raise ValueError("工作目录绑定的 source_dir 不同，请使用新的工作目录")
         columns = {r[1] for r in self.db.execute("PRAGMA table_info(batches)")}
-        if "report_expires_ms" not in columns:
-            self.db.execute("BEGIN")
-            self.db.execute(
-                "ALTER TABLE batches ADD COLUMN report_expires_ms INTEGER NOT NULL DEFAULT 0"
-            )
-            for batch in self.db.execute(
-                "SELECT id,timestamp,final_snapshot FROM batches "
-                "WHERE state='done' AND final_snapshot IS NOT NULL"
-            ):
-                # Older upload_only snapshots deliberately have no Zenoh source.
-                if json.loads(batch["final_snapshot"]).get("source") == "":
-                    self.db.execute(
-                        "UPDATE batches SET report_expires_ms=? WHERE id=?",
-                        (batch["timestamp"] + DEFERRED_REPORT_TTL_MS, batch["id"]),
-                    )
+        self.db.execute("BEGIN")
+        for name, definition in (
+            ("report_expires_ms", "INTEGER NOT NULL DEFAULT 0"),
+            ("report_version", "TEXT NOT NULL DEFAULT ''"),
+            ("report_kind", "TEXT NOT NULL DEFAULT ''"),
+            ("report_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("report_next_ms", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE batches ADD COLUMN {name} {definition}")
+        # Adopt only retained results. Never resurrect acknowledged upload history.
+        self.db.execute(
+            "UPDATE batches SET report_expires_ms=timestamp+? "
+            "WHERE (pending IS NOT NULL OR final_snapshot IS NOT NULL) "
+            "AND report_expires_ms!=timestamp+?",
+            (DEFERRED_REPORT_TTL_MS, DEFERRED_REPORT_TTL_MS),
+        )
+        self.db.execute(
+            """UPDATE batches SET report_expires_ms=timestamp+?,
+            report_version=lower(hex(randomblob(16))),
+            report_kind=CASE WHEN state='done' THEN 'success' ELSE 'failure' END,
+            report_count=0,report_next_ms=0
+            WHERE report_version='' AND (pending IS NOT NULL OR final_snapshot IS NOT NULL)""",
+            (DEFERRED_REPORT_TTL_MS,),
+        )
+        # A persisted random wait is never longer than five seconds, even after
+        # a wall-clock adjustment while the previous process was running.
+        self.db.execute(
+            "UPDATE batches SET report_next_ms=? WHERE report_count>0 AND report_next_ms>?",
+            (now_ms() + 5000, now_ms() + 5000),
+        )
+        # Older versions retained failure snapshots for additional rounds.
+        # A failure already published once must never be replayed on upgrade.
+        removed = self.db.execute(
+            "UPDATE batches SET pending=NULL,final_snapshot=NULL,report_next_ms=0 "
+            "WHERE report_kind='failure' AND report_count>=1 "
+            "AND (pending IS NOT NULL OR final_snapshot IS NOT NULL)"
+        ).rowcount
+        if removed:
+            logger.info("已取消历史失败结果的重复补发 batches=%s", removed)
         self.db.execute("INSERT OR IGNORE INTO settings VALUES ('source_dir',?)", (source,))
         self.db.commit()
         self.configure_batches(config)
@@ -83,7 +117,8 @@ class BatchStore:
                 target = self.target(config, batch["path"])
                 if target != batch["asset_path"]:
                     self.db.execute(
-                        "UPDATE batches SET asset_path=?,pending=NULL WHERE id=?",
+                        "UPDATE batches SET asset_path=?,pending=NULL,final_snapshot=NULL,"
+                        "report_version='',report_kind='',report_count=0,report_next_ms=0 WHERE id=?",
                         (target, batch["id"]),
                     )
                     changed += 1
@@ -166,10 +201,12 @@ class BatchStore:
             )
         ]
 
-    def outbox_next(self, excluded=(), after=None):
+    def outbox_next(self, excluded=(), after=None, *, due_ms=None):
         excluded = tuple(excluded)
-        clause = "(pending IS NOT NULL OR (state='done' AND final_snapshot IS NOT NULL))"
+        clause = "(pending IS NOT NULL OR final_snapshot IS NOT NULL)"
         args = []
+        clause += " AND report_count<CASE WHEN report_kind='failure' THEN 1 ELSE ? END AND report_next_ms<=?"
+        args.extend((RESULT_SEND_COUNT, now_ms() if due_ms is None else due_ms))
         if excluded:
             clause += " AND id NOT IN (" + ",".join("?" for _ in excluded) + ")"
             args.extend(excluded)
@@ -211,8 +248,7 @@ class BatchStore:
         """Discard expired outbox data without changing successful upload history."""
         with self.db:
             expired = self.db.execute(
-                """SELECT id,path FROM batches WHERE state='done'
-                AND report_expires_ms>0 AND report_expires_ms<=?
+                """SELECT id,path,report_version,report_count FROM batches WHERE report_expires_ms>0 AND report_expires_ms<=?
                 AND (pending IS NOT NULL OR final_snapshot IS NOT NULL)""",
                 (now_ms(),),
             ).fetchall()
@@ -222,9 +258,11 @@ class BatchStore:
             )
         for row in expired:
             logger.info(
-                "补报已过期，首次入队已满 24 小时；保留上传成功记录 batch_id=%s path=%s",
+                "补报已过期，首次入队已满 24 小时；保留批次记录 batch_id=%s path=%s version=%s sent=%s",
                 row["id"],
                 row["path"],
+                row["report_version"],
+                row["report_count"],
             )
         return [row["id"] for row in expired]
 
@@ -242,6 +280,10 @@ class BatchStore:
             "bytes",
             "final_snapshot",
             "report_expires_ms",
+            "report_version",
+            "report_kind",
+            "report_count",
+            "report_next_ms",
         }
         if not values.keys() <= allowed:
             raise ValueError("Invalid batch update")
@@ -255,12 +297,90 @@ class BatchStore:
             )
 
     def acknowledge(self, batch_id, payload):
+        """Legacy one-shot receipts must not acknowledge versioned results."""
         with self.db:
             result = self.db.execute(
-                "UPDATE batches SET pending=NULL,final_snapshot=NULL WHERE id=? AND pending=?",
+                "UPDATE batches SET pending=NULL,final_snapshot=NULL "
+                "WHERE id=? AND pending=? AND report_version=''",
                 (batch_id, payload),
             )
         return result.rowcount > 0
+
+    def save_result(self, batch_id, snapshot, kind):
+        batch = self.get(batch_id)
+        deadline = batch["timestamp"] + DEFERRED_REPORT_TTL_MS
+        if now_ms() >= deadline:
+            self.cancel_result(batch_id, reason="首次入队已满 24 小时")
+            self.update(batch_id, report_expires_ms=deadline)
+            logger.info("补报已过期，首次入队已满 24 小时 batch_id=%s", batch_id)
+            return False
+        # Several failure notifications can describe the same attempt.
+        if batch["report_version"] and batch["report_kind"] == kind:
+            return False
+        self.update(
+            batch_id,
+            final_snapshot=snapshot,
+            pending=None,
+            report_version=str(uuid.uuid4()),
+            report_kind=kind,
+            report_count=0,
+            report_next_ms=0,
+            report_expires_ms=deadline,
+        )
+        return True
+
+    def cancel_result(self, batch_id, *, reason):
+        batch = self.get(batch_id)
+        if batch["pending"] is not None or batch["final_snapshot"] is not None:
+            logger.info(
+                "取消结果补发 batch_id=%s version=%s reason=%s",
+                batch_id,
+                batch["report_version"],
+                reason,
+            )
+        self.update(
+            batch_id,
+            pending=None,
+            final_snapshot=None,
+            report_version="",
+            report_kind="",
+            report_count=0,
+            report_next_ms=0,
+        )
+
+    def acknowledge_result(self, receipt, next_ms):
+        batch = self.get(receipt.batch_id)
+        if batch["report_expires_ms"] and now_ms() >= batch["report_expires_ms"]:
+            return False
+        count = receipt.token.send_round
+        limit = result_send_limit(batch["report_kind"])
+        if count > limit:
+            return False
+        with self.db:
+            result = self.db.execute(
+                """UPDATE batches SET report_count=?,report_next_ms=?,
+                pending=CASE WHEN ?=? THEN NULL ELSE pending END,
+                final_snapshot=CASE WHEN ?=? THEN NULL ELSE final_snapshot END
+                WHERE id=? AND report_version=? AND report_count=? AND pending=?""",
+                (
+                    count,
+                    next_ms if count < limit else 0,
+                    count,
+                    limit,
+                    count,
+                    limit,
+                    receipt.batch_id,
+                    receipt.token.version,
+                    count - 1,
+                    receipt.payload,
+                ),
+            )
+        return result.rowcount > 0
+
+    def pending_results(self):
+        return self.db.execute(
+            "SELECT COUNT(*) FROM batches WHERE pending IS NOT NULL OR final_snapshot IS NOT NULL"
+        ).fetchone()[0]
 
     def recover(self):
         with self.db:

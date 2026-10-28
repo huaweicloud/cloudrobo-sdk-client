@@ -12,6 +12,7 @@ from cloudrobo_ingestion.filesystem import manifest
 from cloudrobo_ingestion.progress import BatchProgress, DisabledReporter, Reporter, message_class
 from cloudrobo_ingestion.store import BatchStore
 from cloudrobo_ingestion.worker import run_worker
+from delivery_helpers import complete_result
 from test_worker_supervisor import Connection, drain_until_done, failed_child, successful_child
 
 
@@ -102,8 +103,7 @@ def test_original_report_task_completed_without_reporting_then_source_removed(
         restored.reporter.acks.put((batch["id"], failed["pending"]))
         restored.drain()
         assert restored.store.get(batch["id"])["final_snapshot"] is not None
-        restored.reporter.acks.put((batch["id"], payload))
-        restored.drain()
+        complete_result(restored, batch["id"])
         batch = restored.store.get(batch["id"])
         assert batch["final_snapshot"] is batch["pending"] is None
         assert batch["state"] == "done"
@@ -268,6 +268,7 @@ def test_final_serialization_retries_without_changing_upload_outcome(
         assert done["final_snapshot"] is not None
         assert s.snapshot()["error_info"]["stage"] == "serialize"
         monkeypatch.setattr(daemon, "serialize_snapshot", original)
+        s.store.update(done["id"], report_next_ms=0)
         s.next_final_retry = 0
         s.drain()
         assert s.store.get(done["id"])["pending"] is not None
@@ -311,6 +312,7 @@ def test_deferred_result_survives_offline_restart_and_publish_ack(config, batch_
 
     reporter = Reporter("unused", config.topic, factory=lambda _: Transport(), interval=0.02)
     s = Supervisor(config, reporter, config.work_dir / "status.json")
+    s.result_delay = lambda: 0.03
     s.initialize()
     reporter.start()
     try:
@@ -318,7 +320,9 @@ def test_deferred_result_survives_offline_restart_and_publish_ack(config, batch_
         while s.store.get(row["id"])["final_snapshot"] is not None and time.monotonic() < deadline:
             s.drain()
             time.sleep(0.01)
-        assert len(sent) == 1 and message_class().FromString(sent[0][1]).task_state == 1
+        assert len(sent) == 3 and all(
+            message_class().FromString(item[1]).task_state == 1 for item in sent
+        )
         assert s.store.get(row["id"])["final_snapshot"] is None
         assert s.store.get(row["id"])["pending"] is None
     finally:

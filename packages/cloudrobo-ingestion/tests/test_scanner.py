@@ -12,7 +12,8 @@ from cloudrobo_ingestion.cli import ingestion
 from cloudrobo_ingestion.daemon import Supervisor
 from cloudrobo_ingestion.progress import Reporter, message_class
 from cloudrobo_ingestion.scanner import MANIFEST_WINDOW, SCAN_QUEUE_SIZE, ScanWorker
-from cloudrobo_ingestion.store import BatchStore
+from cloudrobo_ingestion.store import BatchStore, now_ms
+from delivery_helpers import complete_result
 from test_worker_supervisor import drain_until_done, successful_child
 
 
@@ -418,7 +419,10 @@ def test_large_outbox_is_loaded_one_result_at_a_time_and_progresses(config):
         store.db.executemany(
             "INSERT INTO batches(id,path,asset_path,timestamp,state,final_snapshot,task_type,collect_method) "
             "VALUES(?,?,?,?,'done',?,'','')",
-            [(str(i), str(i), "obs://bucket/completed/", i, snapshot) for i in range(1000)],
+            [
+                (str(i), str(i), "obs://bucket/completed/", now_ms() + i, snapshot)
+                for i in range(1000)
+            ],
         )
     store.close()
     sent = []
@@ -448,17 +452,17 @@ def test_large_outbox_is_loaded_one_result_at_a_time_and_progresses(config):
                 lambda: (
                     len(sent) >= i + 1
                     and s.store.db.execute(
-                        "SELECT COUNT(*) FROM batches WHERE final_snapshot IS NOT NULL"
+                        "SELECT COUNT(*) FROM batches WHERE report_count>0"
                     ).fetchone()[0]
-                    <= 999 - i
+                    >= i + 1
                 ),
             )
             assert len(reporter.slots) <= 1 and not s.progress
         assert len(sent) >= 5
         remaining = s.store.db.execute(
-            "SELECT COUNT(*) FROM batches WHERE final_snapshot IS NOT NULL"
+            "SELECT COUNT(*) FROM batches WHERE report_count>0"
         ).fetchone()[0]
-        assert remaining <= 995
+        assert remaining >= 5
     finally:
         reporter.close()
         s.store.close()
@@ -498,11 +502,10 @@ def test_unserializable_outbox_result_does_not_starve_later_results(config, monk
         assert ids[0] in s.final_errors
         s.drain()
         assert s.outbox_id == ids[1] and len(s.reporter.slots) == 1
-        payload = s.reporter.slots[ids[1]][0]
-        s.reporter.acks.put((ids[1], payload))
-        s.drain()
+        complete_result(s, ids[1])
         assert s.store.get(ids[1])["final_snapshot"] is None
         monkeypatch.setattr(daemon, "serialize_snapshot", serialize)
+        s.store.update(ids[0], report_next_ms=0)
         s.next_final_retry = 0
         s.drain()
         assert s.outbox_id == ids[0] and len(s.reporter.slots) == 1

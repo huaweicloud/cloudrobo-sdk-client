@@ -26,6 +26,63 @@ def is_link(path: Path) -> bool:
     return stat.S_ISLNK(s.st_mode) or bool(getattr(s, "st_file_attributes", 0) & 0x400)
 
 
+def _open_private(path, flags):
+    # Creation permissions apply only to new copies, never the read-only source.
+    return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0), mode=0o600)
+
+
+def _windows_mkdir(path):
+    """Create with a protected ACL, including on Python 3.10.11 for Windows."""
+    import ctypes
+    from ctypes import wintypes
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", wintypes.LPVOID),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    convert = advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    convert.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    convert.restype = wintypes.BOOL
+    create = kernel.CreateDirectoryW
+    create.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(SecurityAttributes)]
+    create.restype = wintypes.BOOL
+    kernel.LocalFree.argtypes = [wintypes.LPVOID]
+    kernel.LocalFree.restype = wintypes.LPVOID
+    descriptor = wintypes.LPVOID()
+    # Match CPython's private-directory ACL: SYSTEM, Administrators and owner.
+    sddl = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)"
+    if not convert(sddl, 1, ctypes.byref(descriptor), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, False)
+        if not create(str(path), ctypes.byref(attributes)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+def _mkdir_private(path, *, exist_ok):
+    if os.name != "nt":
+        path.mkdir(parents=True, exist_ok=exist_ok, mode=0o700)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        _windows_mkdir(path)
+    except FileExistsError:
+        if not exist_ok or not path.is_dir() or is_link(path):
+            raise
+
+
 def _walk(root: Path, stop=None):
     if is_link(root):
         raise RejectedBatch(f"不允许链接或 junction: {root.name}")
@@ -94,23 +151,17 @@ def checked_copy(
     stop,
     max_files: int = DEFAULT_MAX_FILES_PER_BATCH,
 ) -> None:
-    target.mkdir(parents=True, exist_ok=False, mode=0o700)
+    _mkdir_private(target, exist_ok=False)
     for entry in entries:
         if stop.is_set():
             raise InterruptedBatch()
         src, dest = source / entry.path, target / entry.path
         if is_link(src):
             raise RejectedBatch(f"复制时发现链接: {entry.path}")
-        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _mkdir_private(dest.parent, exist_ok=True)
         # Opening through O_NOFOLLOW prevents replacing the final source file with a link.
-        fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "rb") as f, os.fdopen(
-            os.open(
-                dest,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
-                0o600,
-            ),
-            "wb",
+        with open(src, "rb", opener=_open_private) as f, open(
+            dest, "xb", opener=_open_private
         ) as out:
             s = os.fstat(f.fileno())
             if (s.st_size, s.st_mtime_ns, s.st_ino) != (entry.size, entry.mtime_ns, entry.inode):

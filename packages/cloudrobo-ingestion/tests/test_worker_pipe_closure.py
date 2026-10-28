@@ -72,6 +72,7 @@ def attach(s, events, kind, where, *, alive=False, exitcode=0):
     s.store.update(batch["id"], state="uploading", attempts=1)
     path = next(iter(s.progress[batch["id"]].nodes))
     s.progress[batch["id"]].update(path, 1, 0, begin=True)
+    s.reporter.set(batch["id"], s.progress[batch["id"]])
     pipe = s.pipe = ClosingPipe(events, kind, where)
     child = s.process = Child(alive, exitcode)
     return batch, pipe, child
@@ -133,9 +134,10 @@ def test_closed_channel_preserves_obs_failure_and_publishes_failed_files(
         assert not s.stop_event.is_set()
         s.launch_next()  # Backoff, rather than immediate retry hiding the failure.
         assert s.process is None
-        index = len(messages)
-        wait_for(lambda: len(messages) >= index + 2)
-        assert all(all(n.result_state == 3 for n in m.nodes) for m in messages[index:])
+        # Failure is published once; backoff must not schedule duplicate rounds.
+        assert row["report_kind"] == "failure"
+        assert row["report_count"] <= 1
+        assert all(n.result_state == 3 for n in messages[-1].nodes)
     finally:
         reporter.close()
         s.store.close()
