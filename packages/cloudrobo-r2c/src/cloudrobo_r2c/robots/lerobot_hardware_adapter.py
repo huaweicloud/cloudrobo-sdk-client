@@ -22,7 +22,7 @@ def create_lerobot_adapter(
     Mirrors :meth:`LeRobotHardwareAdapter.from_config_file` for the
     ``runtime.robot_connect`` / ``runtime.robot_calibrate`` keys: the
     entry-point path constructs the adapter directly (no config file), so
-    connect kwargs must be extracted here ¡ª otherwise ``robot.connect()``
+    connect kwargs must be extracted here -- otherwise ``robot.connect()``
     always falls back to its defaults (e.g. ``calibrate=True``, triggering
     interactive calibration in headless deployments).
     """
@@ -265,6 +265,48 @@ class LeRobotHardwareAdapter(IRobotHardwareAdapter):
         return make_robot_from_config(robot_config_obj)
 
     @staticmethod
+    def _import_builtin_lerobot_robots() -> None:
+        """Import every built-in robot submodule under ``lerobot.robots``.
+
+        The robots shipped inside ``lerobot.robots`` (``so_follower``,
+        ``koch_follower``, ``reachy2``, ...) register their ``robot.type``
+        subclass with ``RobotConfig.register_subclass`` lazily, when the
+        submodule is imported.  The lerobot CLIs trigger this with explicit
+        ``from lerobot.robots import so_follower`` statements at module top
+        level; ``register_third_party_plugins`` only covers *third-party*
+        plugins and skips these built-ins.  Without importing them,
+        ``draccus.decode(RobotConfig, {"type": "so101_follower", ...})``
+        fails with "Couldn't find a choice class".
+
+        Each import is best-effort so a robot whose optional SDK is missing
+        (e.g. ``reachy2_sdk``) does not block registration of the others.
+        """
+        import importlib
+        import pkgutil
+
+        try:
+            import lerobot.robots as lerobot_robots_pkg
+        except ImportError:  # pragma: no cover - optional runtime dependency
+            return
+
+        for module_info in pkgutil.iter_modules(lerobot_robots_pkg.__path__):
+            if not module_info.ispkg:
+                continue
+            try:
+                importlib.import_module(f"lerobot.robots.{module_info.name}")
+            except ImportError:
+                logger.debug(
+                    "Skipped lerobot.robots.%s (optional dependency missing).",
+                    module_info.name,
+                )
+            except Exception:  # pragma: no cover - defensive
+                logger.debug(
+                    "Failed to import lerobot.robots.%s; its robot type may be unavailable.",
+                    module_info.name,
+                    exc_info=True,
+                )
+
+    @staticmethod
     def _default_robot_config_decoder(robot_mapping: Mapping[str, Any]) -> Any:
         logger.debug(
             "Decoding RobotConfig from mapping with keys: %s",
@@ -286,10 +328,13 @@ class LeRobotHardwareAdapter(IRobotHardwareAdapter):
                 "LeRobot and draccus must be installed in the robot environment to build RobotConfig."
             ) from exc
 
-        # Third-party robot plugins (e.g. lerobot_robot_galaxea_a1z) register
+        # Built-in robot submodules (e.g. lerobot.robots.so_follower) and
+        # third-party plugins (e.g. lerobot_robot_galaxea_a1z) both register
         # their robot.type subclass via register_subclass on import. The lerobot
-        # CLIs call this at startup; we must do the same here, otherwise
+        # CLIs import both at startup; we must do the same here, otherwise
         # draccus.decode fails with "Couldn't find a choice class".
+        LeRobotHardwareAdapter._import_builtin_lerobot_robots()
+
         try:
             from lerobot.utils.import_utils import register_third_party_plugins
         except ImportError:  # pragma: no cover - older lerobot without plugin discovery
