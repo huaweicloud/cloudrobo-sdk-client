@@ -18,7 +18,6 @@ from cloudrobo_r2c.core.interfaces import IValueTransformer
 
 def _encode_ndarray_png(value: Any) -> bytes:
     import cv2
-    import numpy as np
 
     if not isinstance(value, np.ndarray):
         raise TypeError("ndarray_to_png expects a numpy.ndarray input")
@@ -30,7 +29,6 @@ def _encode_ndarray_png(value: Any) -> bytes:
 
 def _encode_ndarray_jpeg(value: Any, quality: int = 95) -> bytes:
     import cv2
-    import numpy as np
 
     if not isinstance(value, np.ndarray):
         raise TypeError("ndarray_to_jpeg expects a numpy.ndarray input")
@@ -53,7 +51,6 @@ def _encode_ndarray_bytes(value: Any) -> bytes:
         must already know the expected layout (or receive it out-of-band) in
         order to reconstruct the array via ``np.frombuffer(buf, dtype=…)``.
     """
-    import numpy as np
 
     if not isinstance(value, np.ndarray):
         raise TypeError("ndarray_to_bytes expects a numpy.ndarray input")
@@ -112,7 +109,6 @@ def _validate_image_codec_config(config: Any, *, name: str = "") -> None:
 
 
 def _ros_image_to_ndarray(value: Any) -> Any:
-    import numpy as np
 
     for required in ("height", "width", "encoding", "data"):
         if not hasattr(value, required):
@@ -157,7 +153,6 @@ def _ros_image_to_ndarray(value: Any) -> Any:
 
 def _encode_ndarray_webp(value: Any, quality: int = 80) -> bytes:
     import cv2
-    import numpy as np
 
     if not isinstance(value, np.ndarray):
         raise TypeError("ndarray_to_webp expects a numpy.ndarray input")
@@ -173,7 +168,6 @@ def _encode_ndarray_webp(value: Any, quality: int = 80) -> bytes:
 
 def _ros_compressed_image_to_ndarray(value: Any) -> Any:
     import cv2
-    import numpy as np
 
     if not hasattr(value, "data"):
         raise TypeError(
@@ -606,7 +600,6 @@ class ListToNdarrayTransformer(IValueTransformer):
     """Convert a sequence or numeric value to a numpy ndarray."""
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
-        import numpy as np
 
         if isinstance(value, np.ndarray):
             return value
@@ -968,7 +961,6 @@ class PngToNdarrayTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if not isinstance(value, (bytes, bytearray)):
             raise TypeError("png_to_ndarray expects bytes input")
@@ -985,7 +977,6 @@ class JpegToNdarrayTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if isinstance(value, np.ndarray):
             return value
@@ -1004,7 +995,6 @@ class WebpToNdarrayTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if isinstance(value, np.ndarray):
             return value
@@ -1023,7 +1013,6 @@ class DecodeImageTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if not isinstance(value, (bytes, bytearray)):
             raise TypeError("decode_image expects bytes input")
@@ -1058,7 +1047,6 @@ class BgrToRgbTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if not isinstance(value, np.ndarray):
             raise TypeError("bgr_to_rgb expects numpy.ndarray input")
@@ -1071,7 +1059,6 @@ class RgbToBgrTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if not isinstance(value, np.ndarray):
             raise TypeError("rgb_to_bgr expects numpy.ndarray input")
@@ -1084,7 +1071,6 @@ class ResizeTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         import cv2
-        import numpy as np
 
         if not isinstance(value, np.ndarray):
             raise TypeError("resize expects numpy.ndarray input")
@@ -1189,7 +1175,6 @@ def _resolve_crop_box(value: Any, config: Any) -> tuple:
 
     Returns ``(y1, y2, x1, x2)`` in pixel coordinates.
     """
-    import numpy as np
 
     if not isinstance(value, np.ndarray):
         raise TypeError("crop expects numpy.ndarray input")
@@ -1268,7 +1253,6 @@ class FormatTransformer(IValueTransformer):
     """Convert ndarray layout between HWC and CHW."""
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
-        import numpy as np
 
         if not isinstance(value, np.ndarray):
             raise TypeError("format expects numpy.ndarray input")
@@ -1296,7 +1280,6 @@ class NormalizeTransformer(IValueTransformer):
     """Normalize ndarray values with configurable strategy."""
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
-        import numpy as np
 
         if not isinstance(value, np.ndarray):
             raise TypeError("normalize expects numpy.ndarray input")
@@ -1443,7 +1426,6 @@ class QinglongExtractGripperStatesTransformer(IValueTransformer):
         Returns:
             [left_gripper_state, right_gripper_state] 二值化状态
         """
-        import numpy as np
 
         # 确保输入是列表或数组
         if isinstance(value, (list, tuple)):
