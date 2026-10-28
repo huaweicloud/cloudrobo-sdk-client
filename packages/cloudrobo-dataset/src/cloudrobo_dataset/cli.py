@@ -110,11 +110,10 @@ def create_task(ctx, name, algo_type, task_config, workspace_id, wait_for_result
         raise click.BadParameter("output_name 只能包含中文、数字、字母、下划线（_）、连字符（-）、点（.）、斜线（/）、空格，且不能以空格开头或结尾")
     result = client.create_task(req, workspace_id=workspace_id)
     task_id = result.get("payload", result).get("id")
-    click.echo(f"任务已创建: {task_id}", nl=False)
     status = result.get("payload", result).get("status", "UNKNOWN")
-    click.echo(f", 状态: {status}")
 
     if wait_for_result and task_id:
+        click.echo(f"任务已创建: {task_id}, 状态: {status}")
         click.echo("等待任务完成...")
         last_status = status
 
@@ -135,7 +134,7 @@ def create_task(ctx, name, algo_type, task_config, workspace_id, wait_for_result
                 _print_task_logs(client, task_id, "system")
                 _print_task_logs(client, task_id, "job")
     else:
-        out(result)
+        out(result, prefix_info={"task_id": task_id, "status": status})
 
 
 @proc_group.command("list-tasks")
@@ -480,11 +479,10 @@ def eval_create_task(ctx, name, task_config, workspace_id, wait_for_result, time
         raise click.BadParameter("dataset_name 只能包含中文、数字、字母、下划线（_）、连字符（-）、点（.）、斜线（/）、空格，且不能以空格开头或结尾")
     result = client.create_eval_task(req, workspace_id=workspace_id)
     task_id = result.get("payload", result).get("id")
-    click.echo(f"评测任务已创建: {task_id}", nl=False)
     status = result.get("payload", result).get("status", "UNKNOWN")
-    click.echo(f", 状态: {status}")
 
     if wait_for_result and task_id:
+        click.echo(f"评测任务已创建: {task_id}, 状态: {status}")
         click.echo("等待任务完成...")
         last_status = status
 
@@ -504,7 +502,7 @@ def eval_create_task(ctx, name, task_config, workspace_id, wait_for_result, time
                 _print_eval_task_logs(client, task_id, "system")
                 _print_eval_task_logs(client, task_id, "job")
     else:
-        out(result)
+        out(result, prefix_info={"task_id": task_id, "status": status})
 
 
 @eval_group.command("list-tasks")
