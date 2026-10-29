@@ -1,7 +1,7 @@
 import json
 
 import click
-from cloudrobo_core.cli.cli_utils import get_client, out
+from cloudrobo_core.cli.cli_utils import get_client, out, MarkedOption
 from cloudrobo_core.sdk.exceptions import PathTraversalError, validate_safe_id
 
 from .client import DispatchClient
@@ -54,11 +54,11 @@ def _parse_required_json(ctx, raw, key):
 
 
 @dispatch.command("create-task")
-@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID')
-@click.option("--constraints-json", required=True, callback=_validate_constraints, help='任务约束')
-@click.option("--name", required=True, callback=_validate_name, help='任务名称')
-@click.option("--task", required=True, callback=_validate_task, help='任务描述')
-@click.option("--dry-run", is_flag=True)
+@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID', cls=MarkedOption)
+@click.option("--constraints-json", required=True, callback=_validate_constraints, help='\x08\n任务约束\n- [not required] exec_constraints: 执行技能的约束\n  - [not required] max_iter_num: 最大推理步数，默认100步\n  - [not required] max_run_time: 最大推理时间，单位分钟，默认10分钟\n- [required] model: 执行模型对象，包含执行模型ID，可选检查模型ID\n  - [required] exec_model_id: 执行模型ID\n- [required] robot_id: 机器人ID', cls=MarkedOption)
+@click.option("--name", required=True, callback=_validate_name, help='任务名称', cls=MarkedOption)
+@click.option("--task", required=True, callback=_validate_task, help='任务描述', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def create_task(ctx, session_id, constraints_json, name, task, dry_run):
     """创建任务(CreateDispatcherTask)"""
@@ -77,17 +77,17 @@ def create_task(ctx, session_id, constraints_json, name, task, dry_run):
 
 
 @dispatch.command("list-tasks")
-@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID')
-@click.option("--limit", type=click.IntRange(1, 100), help='每页数据条数')
-@click.option("--offset", type=click.IntRange(0, 10000), help='分页页码偏移量')
-@click.option("--sort-key", type=click.Choice(['create_at', 'created_at', 'update_at', 'updated_at'], case_sensitive=False), callback=_validate_sort_key, default='updated_at', help='排序字段，支持created_at, updated_at, create_at, update_at，默认值updated_at。')
-@click.option("--sort-dir", type=click.Choice(['ASC', 'DESC'], case_sensitive=False), callback=_validate_sort_dir, default='DESC', help='结果排序方式。支持DESC(desc)，ASC(asc)，默认值DESC。')
-@click.option("--status", type=click.Choice(['CANCELLED', 'COMPLETED', 'FAILED', 'RUNNING'], case_sensitive=False), callback=_validate_status, help='根据执行状态查询相关日志。')
-@click.option("--robot-id", default=None, callback=_validate_robot_id, help='机器人id')
-@click.option("--start-time", type=click.IntRange(0, 32503680000000), callback=_validate_start_time, help='按起止时间筛选，执行日志开始时间，UTC时间戳，单位毫秒')
-@click.option("--end-time", type=click.IntRange(0, 32503680000000), callback=_validate_end_time, help='按起止时间筛选，执行日志结束时间，UTC时间戳，单位毫秒')
-@click.option("--infer-service-id", default=None, callback=_validate_infer_service_id, help='推理服务id')
-@click.option("--content-match", default=None, callback=_validate_content_match, help='技能prompt或服务名称模糊搜索内容')
+@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID', cls=MarkedOption)
+@click.option("--limit", type=click.IntRange(1, 100), help='每页数据条数', cls=MarkedOption)
+@click.option("--offset", type=click.IntRange(0, 10000), help='分页页码偏移量', cls=MarkedOption)
+@click.option("--sort-key", type=click.Choice(['create_at', 'created_at', 'update_at', 'updated_at'], case_sensitive=False), callback=_validate_sort_key, default='updated_at', help='排序字段，支持created_at, updated_at, create_at, update_at，默认值updated_at。', cls=MarkedOption)
+@click.option("--sort-dir", type=click.Choice(['ASC', 'DESC'], case_sensitive=False), callback=_validate_sort_dir, default='DESC', help='结果排序方式。支持DESC(desc)，ASC(asc)，默认值DESC。', cls=MarkedOption)
+@click.option("--status", type=click.Choice(['CANCELLED', 'COMPLETED', 'FAILED', 'RUNNING'], case_sensitive=False), callback=_validate_status, help='根据执行状态查询相关日志。', cls=MarkedOption)
+@click.option("--robot-id", default=None, callback=_validate_robot_id, help='机器人id', cls=MarkedOption)
+@click.option("--start-time", type=click.IntRange(0, 32503680000000), callback=_validate_start_time, help='按起止时间筛选，执行日志开始时间，UTC时间戳，单位毫秒', cls=MarkedOption)
+@click.option("--end-time", type=click.IntRange(0, 32503680000000), callback=_validate_end_time, help='按起止时间筛选，执行日志结束时间，UTC时间戳，单位毫秒', cls=MarkedOption)
+@click.option("--infer-service-id", default=None, callback=_validate_infer_service_id, help='推理服务id', cls=MarkedOption)
+@click.option("--content-match", default=None, callback=_validate_content_match, help='技能prompt或服务名称模糊搜索内容', cls=MarkedOption)
 @click.pass_context
 def list_tasks(ctx, session_id, limit, offset, sort_key, sort_dir, status,
                robot_id, start_time, end_time, infer_service_id, content_match):
@@ -120,8 +120,8 @@ def list_tasks(ctx, session_id, limit, offset, sort_key, sort_dir, status,
 
 
 @dispatch.command("show-task")
-@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID')
-@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID')
+@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID', cls=MarkedOption)
+@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID', cls=MarkedOption)
 @click.pass_context
 def show_task(ctx, session_id, task_id):
     """查询任务详情(ShowDispatcherTask)"""
@@ -133,9 +133,9 @@ def show_task(ctx, session_id, task_id):
 
 
 @dispatch.command("cancel-task")
-@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID')
-@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID', cls=MarkedOption)
+@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def cancel_task(ctx, session_id, task_id, dry_run):
     """取消任务(CancelDispatcherTask)"""
@@ -152,11 +152,11 @@ def cancel_task(ctx, session_id, task_id, dry_run):
 
 
 @dispatch.command("show-task-result")
-@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID')
-@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID')
-@click.option("--inverse", is_flag=True, default=False, help='倒置，如果为true，则倒序查询，此时offset为0代表最后一个字节')
-@click.option("--limit", type=click.IntRange(100, 10000), default=200, help='单次请求日志字节数限制，默认200')
-@click.option("--offset", type=click.IntRange(0, 2147483647), default=0, help='单次请求日志字节偏移量，默认0')
+@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID', cls=MarkedOption)
+@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID', cls=MarkedOption)
+@click.option("--inverse", is_flag=True, default=False, help='倒置，如果为true，则倒序查询，此时offset为0代表最后一个字节', cls=MarkedOption)
+@click.option("--limit", type=click.IntRange(100, 10000), default=200, help='单次请求日志字节数限制，默认200', cls=MarkedOption)
+@click.option("--offset", type=click.IntRange(0, 2147483647), default=0, help='单次请求日志字节偏移量，默认0', cls=MarkedOption)
 @click.pass_context
 def show_task_result(ctx, session_id, task_id, inverse, limit, offset):
     """获取任务结果(ShowDispatcherTaskResult)"""
@@ -175,9 +175,9 @@ def show_task_result(ctx, session_id, task_id, inverse, limit, offset):
 
 
 @dispatch.command("wait-task")
-@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID')
-@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID')
-@click.option("--timeout", type=click.IntRange(1, 3600), default=600, help="等待任务超时时间(秒)，默认600")
+@click.option("--session-id", required=False, default=None, callback=_validate_session_id, help='会话ID', cls=MarkedOption)
+@click.option("--task-id", required=True, callback=_validate_task_id, help='任务唯一标识ID', cls=MarkedOption)
+@click.option("--timeout", type=click.IntRange(1, 3600), default=600, help="等待任务超时时间(秒)，默认600", cls=MarkedOption)
 @click.pass_context
 def wait_task(ctx, session_id, task_id, timeout):
     """等待任务完成(每5秒查询直到状态非RUNNING或超时)"""
