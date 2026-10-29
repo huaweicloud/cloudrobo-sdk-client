@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 import click
-from cloudrobo_core.cli.cli_utils import get_client, out
+from cloudrobo_core.cli.cli_utils import get_client, out, MarkedOption
 
 from .client import RobotClient
 
@@ -48,13 +48,13 @@ def robot():
 
 
 @robot.command("create")
-@click.option("--description", default=None, callback=_validate_description, help='描述')
-@click.option("--manufacturer", required=True, callback=_validate_manufacturer, help='厂家')
-@click.option("--name", required=True, callback=_validate_name, help='名称')
-@click.option("--robot-model", required=True, callback=_validate_robot_model, help='型号')
-@click.option("--type", type=click.Choice(['ARM', 'HUMANOID', 'OPERATION', 'OTHER', 'QUADRUPED', 'WHEELED'], case_sensitive=False), callback=_validate_type, required=True, help='机器人类型：HUMANOID-人形，QUADRUPED-四足，ARM-机械臂，OPERATION-复合，WHEELED-轮式，OTHER-其他')
-@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--description", default=None, callback=_validate_description, help='描述', cls=MarkedOption)
+@click.option("--manufacturer", required=True, callback=_validate_manufacturer, help='厂家', cls=MarkedOption)
+@click.option("--name", required=True, callback=_validate_name, help='名称', cls=MarkedOption)
+@click.option("--robot-model", required=True, callback=_validate_robot_model, help='型号', cls=MarkedOption)
+@click.option("--type", type=click.Choice(['ARM', 'HUMANOID', 'OPERATION', 'OTHER', 'QUADRUPED', 'WHEELED'], case_sensitive=False), callback=_validate_type, required=True, help='机器人类型：HUMANOID-人形，QUADRUPED-四足，ARM-机械臂，OPERATION-复合，WHEELED-轮式，OTHER-其他', cls=MarkedOption)
+@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def create_robot(ctx, description, manufacturer, name, robot_model, type, workspace_id, dry_run):
     """注册机器人"""
@@ -76,17 +76,17 @@ def create_robot(ctx, description, manufacturer, name, robot_model, type, worksp
 
 
 @robot.command("list")
-@click.option("--limit", type=click.IntRange(1, 100), callback=_validate_limit, help='分页查询单页数据条数')
-@click.option("--offset", type=click.IntRange(0, 1000), callback=_validate_offset, help='分页查询偏移量')
-@click.option("--sort", default=None, callback=_validate_sort, help='排序规则，格式：字段:排序方式，例：created_at:desc')
-@click.option("--name", default=None, callback=_validate_name, help='机器人名称模糊筛选')
-@click.option("--status", default=None, callback=_validate_status, help='机器人状态精准筛选,支持多选')
-@click.option("--manufacturer", default=None, callback=_validate_manufacturer, help='机器人厂家筛选')
-@click.option("--robot-model", default=None, callback=_validate_robot_model, help='机器人型号筛选')
-@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间唯一标识ID')
-@click.option("--type", "robot_type", default=None, callback=_validate_type, help='机器人类型筛选')
-@click.option("--user-id", default=None, callback=_validate_user_id, help='用户id筛选')
-@click.option("--user-name", default=None, callback=_validate_user_name, help='用户名筛选')
+@click.option("--limit", type=click.IntRange(1, 100), callback=_validate_limit, help='分页查询单页数据条数', cls=MarkedOption)
+@click.option("--offset", type=click.IntRange(0, 1000), callback=_validate_offset, help='分页查询偏移量', cls=MarkedOption)
+@click.option("--sort", default=None, callback=_validate_sort, help='排序规则，格式：字段:排序方式，例：created_at:desc', cls=MarkedOption)
+@click.option("--name", default=None, callback=_validate_name, help='机器人名称模糊筛选', cls=MarkedOption)
+@click.option("--status", default=None, callback=_validate_status, help='机器人状态精准筛选,支持多选', cls=MarkedOption)
+@click.option("--manufacturer", default=None, callback=_validate_manufacturer, help='机器人厂家筛选', cls=MarkedOption)
+@click.option("--robot-model", default=None, callback=_validate_robot_model, help='机器人型号筛选', cls=MarkedOption)
+@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间唯一标识ID', cls=MarkedOption)
+@click.option("--type", "robot_type", default=None, callback=_validate_type, help='机器人类型筛选', cls=MarkedOption)
+@click.option("--user-id", default=None, callback=_validate_user_id, help='用户id筛选', cls=MarkedOption)
+@click.option("--user-name", default=None, callback=_validate_user_name, help='用户名筛选', cls=MarkedOption)
 @click.pass_context
 def list_robots(ctx, limit, offset, sort, name, status, manufacturer, robot_model,
                 workspace_id, robot_type, user_id, user_name):
@@ -120,7 +120,7 @@ def list_robots(ctx, limit, offset, sort, name, status, manufacturer, robot_mode
 
 
 @robot.command("show")
-@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID')
+@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID', cls=MarkedOption)
 @click.pass_context
 def show_robot(ctx, robot_id):
     """查询机器人详情"""
@@ -130,11 +130,11 @@ def show_robot(ctx, robot_id):
 
 
 @robot.command("update")
-@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID')
-@click.option("--description", default=None, callback=_validate_description, help='描述')
-@click.option("--name", default=None, callback=_validate_name, help='机器人名称')
-@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='当前工作空间ID，只允许上传该机器人对应的工作空间ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID', cls=MarkedOption)
+@click.option("--description", default=None, callback=_validate_description, help='描述', cls=MarkedOption)
+@click.option("--name", default=None, callback=_validate_name, help='机器人名称', cls=MarkedOption)
+@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='当前工作空间ID，只允许上传该机器人对应的工作空间ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def update_robot(ctx, robot_id, name, description, workspace_id, dry_run):
     """更新机器人信息"""
@@ -154,8 +154,8 @@ def update_robot(ctx, robot_id, name, description, workspace_id, dry_run):
 
 
 @robot.command("delete")
-@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def delete_robot(ctx, robot_id, dry_run):
     """删除机器人"""
@@ -168,10 +168,10 @@ def delete_robot(ctx, robot_id, dry_run):
 
 
 @robot.command("export-certificate")
-@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID')
-@click.option("--password", default=None, callback=_validate_password, help='机器人证书加密密码')
-@click.option("--output", required=True, help="机器人证书导出目录")
-@click.option("--dry-run", is_flag=True)
+@click.option("--robot-id", required=True, callback=_validate_robot_id, help='机器人唯一标识ID', cls=MarkedOption)
+@click.option("--password", default=None, callback=_validate_password, help='机器人证书加密密码', cls=MarkedOption)
+@click.option("--output", required=True, help="机器人证书导出目录", cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def export_certificate(ctx, robot_id, password, output, dry_run):
     """导出机器人证书"""

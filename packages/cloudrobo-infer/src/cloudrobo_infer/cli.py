@@ -1,7 +1,7 @@
 import json
 
 import click
-from cloudrobo_core.cli.cli_utils import get_client, out
+from cloudrobo_core.cli.cli_utils import get_client, out, MarkedOption
 
 from .client import InferClient
 
@@ -78,27 +78,27 @@ def _parse_required_json(ctx, raw, key):
 
 
 @infer.command("create")
-@click.option("--cmd", default=None, callback=_validate_cmd, help='启动命令')
-@click.option("--deploy-timeout-minutes", type=click.IntRange(1, 300), callback=_validate_deploy_timeout_minutes, help='部署超时时间')
-@click.option("--description", default=None, callback=_validate_description, help='描述')
-@click.option("--envs-json", default=None, callback=_validate_envs, help='环境变量')
-@click.option("--files-json", default=None, callback=_validate_files, help='文件挂载')
-@click.option("--flavor", required=True, callback=_validate_flavor, help='资源规格')
-@click.option("--image-swr-url", default=None, callback=_validate_image_swr_url, help='镜像地址')
-@click.option("--internet-access-enable", is_flag=True, default=False, help='是否开启公网访问')
-@click.option("--liveness-health-json", default=None, callback=_validate_liveness_health, help='模型服务健康检查')
-@click.option("--model-json", required=True, callback=_validate_model, help='模型信息')
-@click.option("--model-ext-metadata", default=None, callback=_validate_model_ext_metadata, help='模型扩展元数据，JSON/YAML 格式的 r2c 配置信息。')
-@click.option("--name", required=True, callback=_validate_name, help='服务名称')
-@click.option("--pool-id", default=None, callback=_validate_pool_id, help='资源池ID')
-@click.option("--pool-type", type=click.Choice(['DEDICATED', 'SHARED'], case_sensitive=False), callback=_validate_pool_type, required=True, help='资源池类型')
-@click.option("--readiness-health-json", default=None, callback=_validate_readiness_health, help='模型服务健康检查')
-@click.option("--service-invoke-json", default=None, callback=_validate_service_invoke, help='服务调用配置')
-@click.option("--skill-config-json", default=None, callback=_validate_skill_config, help='技能配置')
-@click.option("--startup-health-json", default=None, callback=_validate_startup_health, help='模型服务健康检查')
-@click.option("--stop-schedule-json", required=True, callback=_validate_stop_schedule, help='定时停止配置')
-@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--cmd", default=None, callback=_validate_cmd, help='启动命令', cls=MarkedOption)
+@click.option("--deploy-timeout-minutes", type=click.IntRange(1, 300), callback=_validate_deploy_timeout_minutes, help='部署超时时间', cls=MarkedOption)
+@click.option("--description", default=None, callback=_validate_description, help='描述', cls=MarkedOption)
+@click.option("--envs-json", default=None, callback=_validate_envs, help='环境变量', cls=MarkedOption)
+@click.option("--files-json", default=None, callback=_validate_files, help='\x08\n文件挂载\n- [not required] address: 存储地址\n- [not required] host_cache: 主机缓存\n- [not required] mount_path: 挂载路径\n- [not required] os_warm_up: 系统预热\n- [not required] source: 存储类型：OBS-对象存储', cls=MarkedOption)
+@click.option("--flavor", required=True, callback=_validate_flavor, help='资源规格', cls=MarkedOption)
+@click.option("--image-swr-url", default=None, callback=_validate_image_swr_url, help='镜像地址', cls=MarkedOption)
+@click.option("--internet-access-enable", is_flag=True, default=False, help='是否开启公网访问', cls=MarkedOption)
+@click.option("--liveness-health-json", default=None, callback=_validate_liveness_health, help='\x08\n模型服务健康检查\n- [not required] check_method: 检查方法必须是EXEC/HTTP\n- [not required] cmd: 检查命令\n- [not required] failure_threshold: 失败检查次数\n- [not required] initial_delay_seconds: 初次检查延迟时长\n- [not required] period_seconds: 检查周期时长\n- [not required] protocol: 协议类型必须是HTTP/HTTPS\n- [not required] timeout_seconds: 超时时长\n- [not required] url: 检查请求url', cls=MarkedOption)
+@click.option("--model-json", required=True, callback=_validate_model, help='\x08\n模型信息\n- [required] model_id: 模型ID\n- [required] model_version_id: 模型版本ID\n- [not required] mount_path: 挂载路径', cls=MarkedOption)
+@click.option("--model-ext-metadata", default=None, callback=_validate_model_ext_metadata, help='模型扩展元数据，JSON/YAML 格式的 r2c 配置信息。', cls=MarkedOption)
+@click.option("--name", required=True, callback=_validate_name, help='服务名称', cls=MarkedOption)
+@click.option("--pool-id", default=None, callback=_validate_pool_id, help='资源池ID', cls=MarkedOption)
+@click.option("--pool-type", type=click.Choice(['DEDICATED', 'SHARED'], case_sensitive=False), callback=_validate_pool_type, required=True, help='资源池类型', cls=MarkedOption)
+@click.option("--readiness-health-json", default=None, callback=_validate_readiness_health, help='\x08\n模型服务健康检查\n- [not required] check_method: 检查方法必须是EXEC/HTTP\n- [not required] cmd: 检查命令\n- [not required] failure_threshold: 失败检查次数\n- [not required] initial_delay_seconds: 初次检查延迟时长\n- [not required] period_seconds: 检查周期时长\n- [not required] protocol: 协议类型必须是HTTP/HTTPS\n- [not required] timeout_seconds: 超时时长\n- [not required] url: 检查请求url', cls=MarkedOption)
+@click.option("--service-invoke-json", default=None, callback=_validate_service_invoke, help='\x08\n服务调用配置\n- [required] auth_type: 认证类型：API_KEY-密钥认证，NONE-无认证\n- [required] port: 端口\n- [required] protocol: 协议：HTTP-http协议，HTTPS-https协议，WS-websocket协议，WSS-websockets协议', cls=MarkedOption)
+@click.option("--skill-config-json", default=None, callback=_validate_skill_config, help='\x08\n技能配置\n- [not required] skills[]: 技能列表\n  - [required] name: 技能名称\n  - [required] prompt: 技能提示词\n- [not required] strict: 是否严格匹配', cls=MarkedOption)
+@click.option("--startup-health-json", default=None, callback=_validate_startup_health, help='\x08\n模型服务健康检查\n- [not required] check_method: 检查方法必须是EXEC/HTTP\n- [not required] cmd: 检查命令\n- [not required] failure_threshold: 失败检查次数\n- [not required] initial_delay_seconds: 初次检查延迟时长\n- [not required] period_seconds: 检查周期时长\n- [not required] protocol: 协议类型必须是HTTP/HTTPS\n- [not required] timeout_seconds: 超时时长\n- [not required] url: 检查请求url', cls=MarkedOption)
+@click.option("--stop-schedule-json", required=True, callback=_validate_stop_schedule, help='\x08\n定时停止配置\n- [required] duration: 时长\n- [required] time_unit: 单位：MINUTES-分钟，HOURS-小时，DAYS-天', cls=MarkedOption)
+@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def create_infer_service(ctx, cmd, deploy_timeout_minutes, description, envs_json,
                          files_json, flavor, image_swr_url, internet_access_enable,
@@ -146,20 +146,20 @@ def create_infer_service(ctx, cmd, deploy_timeout_minutes, description, envs_jso
 
 
 @infer.command("list")
-@click.option("--limit", type=click.IntRange(1, 50), default=10, callback=_validate_limit, help='每页数据条数')
-@click.option("--offset", type=click.IntRange(0, 1000), default=0, callback=_validate_offset, help='分页页码偏移量')
-@click.option("--sort-key", type=click.Choice(['create_at', 'created_at', 'update_at', 'updated_at'], case_sensitive=False), callback=_validate_sort_key, help='排序字段，支持 create_at / update_at / created_at / updated_at')
-@click.option("--sort-dir", type=click.Choice(['ASC', 'DESC'], case_sensitive=False), callback=_validate_sort_dir, help='排序方向，ASC正序 / DESC倒序')
-@click.option("--name", default=None, callback=_validate_name, help='推理服务名称模糊查询')
-@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间ID')
-@click.option("--status", default=None, callback=_validate_status, help='根据服务状态查询相关推理服务，支持多选')
-@click.option("--model-id", default=None, callback=_validate_model_id, help='模型资产ID筛选')
-@click.option("--model-name", default=None, callback=_validate_model_name, help='模型资产名称筛选')
-@click.option("--model-version-id", default=None, callback=_validate_model_version_id, help='模型版本ID筛选')
-@click.option("--model-version-name", default=None, callback=_validate_model_version_name, help='模型版本名称筛选')
-@click.option("--user-name", default=None, callback=_validate_user_name, help='创建人名称筛选')
-@click.option("--user-id", default=None, callback=_validate_user_id, help='创建人ID筛选')
-@click.option("--contain-ext-metadata", is_flag=True, default=None, help='是否只返回包含 model_ext_metadata 的记录。省略=返回全部；true=只返回有 model_ext_metadata 的记录；false=只返回没有 model_ext_metadata 的记录')
+@click.option("--limit", type=click.IntRange(1, 50), default=10, callback=_validate_limit, help='每页数据条数', cls=MarkedOption)
+@click.option("--offset", type=click.IntRange(0, 1000), default=0, callback=_validate_offset, help='分页页码偏移量', cls=MarkedOption)
+@click.option("--sort-key", type=click.Choice(['create_at', 'created_at', 'update_at', 'updated_at'], case_sensitive=False), callback=_validate_sort_key, help='排序字段，支持 create_at / update_at / created_at / updated_at', cls=MarkedOption)
+@click.option("--sort-dir", type=click.Choice(['ASC', 'DESC'], case_sensitive=False), callback=_validate_sort_dir, help='排序方向，ASC正序 / DESC倒序', cls=MarkedOption)
+@click.option("--name", default=None, callback=_validate_name, help='推理服务名称模糊查询', cls=MarkedOption)
+@click.option("--workspace-id", required=False, default=None, callback=_validate_workspace_id, help='工作空间ID', cls=MarkedOption)
+@click.option("--status", default=None, callback=_validate_status, help='根据服务状态查询相关推理服务，支持多选', cls=MarkedOption)
+@click.option("--model-id", default=None, callback=_validate_model_id, help='模型资产ID筛选', cls=MarkedOption)
+@click.option("--model-name", default=None, callback=_validate_model_name, help='模型资产名称筛选', cls=MarkedOption)
+@click.option("--model-version-id", default=None, callback=_validate_model_version_id, help='模型版本ID筛选', cls=MarkedOption)
+@click.option("--model-version-name", default=None, callback=_validate_model_version_name, help='模型版本名称筛选', cls=MarkedOption)
+@click.option("--user-name", default=None, callback=_validate_user_name, help='创建人名称筛选', cls=MarkedOption)
+@click.option("--user-id", default=None, callback=_validate_user_id, help='创建人ID筛选', cls=MarkedOption)
+@click.option("--contain-ext-metadata", is_flag=True, default=None, help='是否只返回包含 model_ext_metadata 的记录。省略=返回全部；true=只返回有 model_ext_metadata 的记录；false=只返回没有 model_ext_metadata 的记录', cls=MarkedOption)
 @click.pass_context
 def list_infer_services(ctx, limit, offset, sort_key, sort_dir, name, workspace_id,
                         status, model_id, model_name, model_version_id,
@@ -200,7 +200,7 @@ def list_infer_services(ctx, limit, offset, sort_key, sort_dir, name, workspace_
 
 
 @infer.command("show")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
 @click.pass_context
 def show_infer_service(ctx, service_id):
     """查询推理服务详情"""
@@ -210,10 +210,10 @@ def show_infer_service(ctx, service_id):
 
 
 @infer.command("update")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
-@click.option("--description", default=None, callback=_validate_description, help='描述')
-@click.option("--model-ext-metadata", default=None, callback=_validate_model_ext_metadata, help='模型扩展元数据，JSON/YAML 格式的 r2c 配置信息。')
-@click.option("--dry-run", is_flag=True)
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
+@click.option("--description", default=None, callback=_validate_description, help='描述', cls=MarkedOption)
+@click.option("--model-ext-metadata", default=None, callback=_validate_model_ext_metadata, help='模型扩展元数据，JSON/YAML 格式的 r2c 配置信息。', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def update_infer_service(ctx, service_id, description, model_ext_metadata, dry_run):
     """更新推理服务配置"""
@@ -234,8 +234,8 @@ def update_infer_service(ctx, service_id, description, model_ext_metadata, dry_r
 
 
 @infer.command("delete")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def delete_infer_service(ctx, service_id, dry_run):
     """删除推理服务"""
@@ -248,8 +248,8 @@ def delete_infer_service(ctx, service_id, dry_run):
 
 
 @infer.command("start")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def start_infer_service(ctx, service_id, dry_run):
     """启动推理服务"""
@@ -262,8 +262,8 @@ def start_infer_service(ctx, service_id, dry_run):
 
 
 @infer.command("stop")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
-@click.option("--dry-run", is_flag=True)
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def stop_infer_service(ctx, service_id, dry_run):
     """停止推理服务"""
@@ -276,16 +276,16 @@ def stop_infer_service(ctx, service_id, dry_run):
 
 
 @infer.command("list-logs")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
-@click.option("--end-time", type=click.IntRange(0, 32503680000000), required=True, callback=_validate_end_time, help='搜索日志的结束时间。')
-@click.option("--highlight", is_flag=True, default=None, help='在查询结果中日志关键词是否高亮显示。')
-@click.option("--is-count", is_flag=True, default=None, help='在查询结果中是否统计日志条数。')
-@click.option("--is-desc", is_flag=True, default=None, help='表示日志查询的顺序，当前支持顺序（false）或倒序查询（true）。')
-@click.option("--keywords", default=None, callback=_validate_keywords, help='支持关键词精确搜索。关键词指相邻两个分词之间的单词。')
-@click.option("--limit", type=click.IntRange(1, 5000), callback=_validate_limit, help='每次查询的日志条数。最小值：1，最大值：5000。')
-@click.option("--line-num", default=None, callback=_validate_line_num, help='日志单行序列号，标识日志上报顺序，通常用于分页查询和日志数据的有序处理。分页查询需要使用该参数，用于从上次查询结束的问题继续查询。该参数从上次查询的返回结果中获取。')
-@click.option("--start-time", type=click.IntRange(0, 32503680000000), required=True, callback=_validate_start_time, help='搜索日志的起始时间。')
-@click.option("--dry-run", is_flag=True)
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
+@click.option("--end-time", type=click.IntRange(0, 32503680000000), required=True, callback=_validate_end_time, help='搜索日志的结束时间。', cls=MarkedOption)
+@click.option("--highlight", is_flag=True, default=None, help='在查询结果中日志关键词是否高亮显示。', cls=MarkedOption)
+@click.option("--is-count", is_flag=True, default=None, help='在查询结果中是否统计日志条数。', cls=MarkedOption)
+@click.option("--is-desc", is_flag=True, default=None, help='表示日志查询的顺序，当前支持顺序（false）或倒序查询（true）。', cls=MarkedOption)
+@click.option("--keywords", default=None, callback=_validate_keywords, help='支持关键词精确搜索。关键词指相邻两个分词之间的单词。', cls=MarkedOption)
+@click.option("--limit", type=click.IntRange(1, 5000), callback=_validate_limit, help='每次查询的日志条数。最小值：1，最大值：5000。', cls=MarkedOption)
+@click.option("--line-num", default=None, callback=_validate_line_num, help='日志单行序列号，标识日志上报顺序，通常用于分页查询和日志数据的有序处理。分页查询需要使用该参数，用于从上次查询结束的问题继续查询。该参数从上次查询的返回结果中获取。', cls=MarkedOption)
+@click.option("--start-time", type=click.IntRange(0, 32503680000000), required=True, callback=_validate_start_time, help='搜索日志的起始时间。', cls=MarkedOption)
+@click.option("--dry-run", is_flag=True, cls=MarkedOption)
 @click.pass_context
 def list_infer_service_logs(ctx, service_id, start_time, end_time, limit, is_desc,
                             line_num, is_count, keywords, highlight, dry_run):
@@ -315,8 +315,8 @@ def list_infer_service_logs(ctx, service_id, start_time, end_time, limit, is_des
 
 
 @infer.command("wait-deploy")
-@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID')
-@click.option("--timeout", type=click.IntRange(1, 3600), default=600, help="部署等待超时时间(秒)，默认600")
+@click.option("--service-id", required=True, callback=_validate_service_id, help='推理服务唯一标识ID', cls=MarkedOption)
+@click.option("--timeout", type=click.IntRange(1, 3600), default=600, help="部署等待超时时间(秒)，默认600", cls=MarkedOption)
 @click.pass_context
 def wait_deploy(ctx, service_id, timeout):
     """等待推理服务部署完成"""
