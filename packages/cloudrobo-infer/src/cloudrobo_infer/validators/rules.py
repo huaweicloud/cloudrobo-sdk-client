@@ -244,7 +244,6 @@ CREATEINFERENCESERVICEREQUESTBODY_RULES: Dict[str, Any] = {
         'pool_id': {
             'max_length': 64,
             'min_length': 0,
-            'required': True,
             'source': 'CreateInferenceServiceRequestBody.pool_id',
             'source_doc': '资源池ID',
             'type': 'string'
@@ -499,6 +498,7 @@ CREATEINFERENCESERVICEREQUESTBODY_RULES: Dict[str, Any] = {
         'stop_schedule': {
             'fields': {
                 'duration': {
+                    'default': 1,
                     'maximum': 10080,
                     'minimum': 1,
                     'required': True,
@@ -507,6 +507,7 @@ CREATEINFERENCESERVICEREQUESTBODY_RULES: Dict[str, Any] = {
                     'type': 'integer'
                 },
                 'time_unit': {
+                    'default': 'HOURS',
                     'enum': [
                         'MINUTES',
                         'HOURS',
@@ -520,6 +521,7 @@ CREATEINFERENCESERVICEREQUESTBODY_RULES: Dict[str, Any] = {
                     'type': 'string'
                 }
             },
+            'required': True,
             'required_fields': [
                 'duration',
                 'time_unit'
@@ -541,8 +543,8 @@ CREATEINFERENCESERVICEREQUESTBODY_RULES: Dict[str, Any] = {
         'flavor',
         'model',
         'name',
-        'pool_id',
         'pool_type',
+        'stop_schedule',
         'workspace_id'
     ],
     'source': 'pilot-manager.yaml#/components/schemas/CreateInferenceServiceRequestBody',
@@ -590,6 +592,7 @@ MODELINFO_RULES: Dict[str, Any] = {
 SCHEDULECONFIG_RULES: Dict[str, Any] = {
     'fields': {
         'duration': {
+            'default': 1,
             'maximum': 10080,
             'minimum': 1,
             'required': True,
@@ -598,6 +601,7 @@ SCHEDULECONFIG_RULES: Dict[str, Any] = {
             'type': 'integer'
         },
         'time_unit': {
+            'default': 'HOURS',
             'enum': [
                 'MINUTES',
                 'HOURS',
