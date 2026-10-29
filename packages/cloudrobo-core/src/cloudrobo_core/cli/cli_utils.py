@@ -24,3 +24,31 @@ def out(result, prefix_info=None):
         click.echo(json.dumps(output, ensure_ascii=False, indent=2))
     else:
         click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+class MarkedOption(click.Option):
+    """An Option whose --help prefixes a required/optional marker.
+
+    click appends `[required]` after the help description by default; this class
+    moves the marker to the front (`[required] 描述` / `[not required] 描述`) and
+    keeps click's built-in required validation untouched.
+    """
+
+    def get_help_extra(self, ctx):
+        extra = super().get_help_extra(ctx)
+        extra.pop("required", None)
+        return extra
+
+    def get_help_record(self, ctx):
+        record = super().get_help_record(ctx)
+        if record is None:
+            return None
+        opts, help_text = record
+        marker = "[required]" if self.required else "[not required]"
+        if help_text.startswith("\x08\n"):
+            help_text = "\x08\n" + marker + " " + help_text[2:]
+        elif help_text:
+            help_text = marker + " " + help_text
+        else:
+            help_text = marker
+        return opts, help_text
