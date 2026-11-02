@@ -1,0 +1,33 @@
+name: Ingestion cross-platform tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ingestion:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.10', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install developer and validation dependencies
+        run: >-
+          python -m pip install pytest ruff -e packages/cloudrobo-core
+          -e packages/cloudrobo-workspace -e packages/cloudrobo-resource
+          -e "packages/cloudrobo-r2c[client]"
+          -e "packages/cloudrobo-ingestion[lerobot-validation]"
+          -e "tools/ingestion-mock[test]"
+      - name: Test ingestion, developer mock and distribution boundaries
+        run: python -m pytest packages/cloudrobo-ingestion/tests packages/cloudrobo-core/tests tools/ingestion-mock/tests -q
+      - name: Lint ingestion
+        run: ruff check packages/cloudrobo-ingestion tools/ingestion-mock packages/cloudrobo-core/tests/test_obs_progress.py

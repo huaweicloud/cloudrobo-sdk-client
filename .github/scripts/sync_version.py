@@ -65,6 +65,19 @@ def sync_file(path: Path, version: str) -> list[str]:
         changes.append(f"{n} hw-cloudrobo-*== pins -> {version}")
     text = new_text
 
+    # Ingestion uses the OBS progress extension and the new R2C protobuf.
+    # At release time require these companion packages from the same release;
+    # otherwise an already-installed older package can satisfy >=0.1.0 but
+    # cannot provide the new API/message.
+    if path.parent.name == "cloudrobo-ingestion":
+        new_text, n = re.subn(
+            r"(hw-cloudrobo-(?:core|r2c)(?:\[client\])?)>=[^\",\s]+",
+            rf"\g<1>>={version}", text,
+        )
+        if n and new_text != text:
+            changes.append(f"{n} companion minimum versions -> {version}")
+        text = new_text
+
     if changes:
         path.write_text(text, encoding="utf-8")
     return changes

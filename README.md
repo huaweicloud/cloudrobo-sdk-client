@@ -1,5 +1,9 @@
 # CloudRobo Client
 
+Local data ingestion is available through `cloudrobo ingestion start/status/stop`.
+See [ingestion setup, configuration and recovery](packages/cloudrobo-ingestion/README.md).
+The full bundle requires Python >=3.10; individual legacy packages retain their own requirements.
+
 CloudRobo command-line tool and Python SDK for Huawei Cloud's Embodied Intelligence Platform (CloudRobo) - resource management and task orchestration.
 
 [中文文档](README_CN.md)
@@ -38,7 +42,7 @@ cd cloudrobo-client
 pip install -r requirements-dev-editable.txt
 ```
 
-This installs all sub-packages in editable mode. Code changes take effect immediately.
+This installs all sub-packages and the repository-only ingestion mock tool in editable mode. Code changes take effect immediately.
 
 ## Quick Start
 
@@ -113,6 +117,7 @@ cloudrobo-client/
 │   ├── cloudrobo-workspace/     # Workspace management
 │   ├── cloudrobo-resource/      # Resource management
 │   └── cloudrobo-r2c/           # Data Plane SDK
+├── tools/ingestion-mock/         # Developer-only foreground tests (not published)
 ├── docs/                        # Project-level documentation
 └── pyproject.toml               # Aggregate installation configuration
 ```
@@ -121,7 +126,7 @@ cloudrobo-client/
 
 ```bash
 # Run all tests
-python -m pytest tests/ packages/ -v
+python -m pytest tests/ packages/ tools/ingestion-mock/tests/ -v
 
 # Run tests for a single package
 python -m pytest packages/cloudrobo-asset/tests/ -v

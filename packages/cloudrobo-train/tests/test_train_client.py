@@ -28,7 +28,13 @@ class TestTrainClient:
         result = self.client.create_train_task(req)
         assert result == {"task_id": "train1"}
         self.mock_http.post.assert_called_with(
-            f"{BASE}/v1/training/train-tasks", json={**req, "workspace_id": "ws-test"}
+            f"{BASE}/v1/training/train-tasks",
+            json={
+                **req,
+                "workspace_id": "ws-test",
+                "checkpoint_max_keep": 10,
+                "output_retention_days": 14,
+            },
         )
 
     def test_list_train_tasks(self):
@@ -96,6 +102,8 @@ class TestTrainClient:
                 "train_mode": "MODEL_TUNING",
                 "train_method": "FFT",
                 "workspace_id": "ws-test",
+                "checkpoint_max_keep": 10,
+                "output_retention_days": 14,
             },
         )
 
@@ -112,7 +120,12 @@ class TestTrainClient:
             "status": "FINISHED",
         }
         self.mock_http.post.return_value = {"payload": {"item": {"task_id": "t1"}}}
-        user_req = {"description": "updated", "spec": "Ascend: 2 * SNT9B2"}
+        user_req = {
+            "description": "updated",
+            "spec": "Ascend: 2 * SNT9B2",
+            "checkpoint_max_keep": 25,
+            "output_retention_days": 30,
+        }
         result = self.client.restart_train_task("t1", req=user_req)
         assert result == {"task_id": "t1"}
         call_args = self.mock_http.post.call_args
@@ -121,13 +134,27 @@ class TestTrainClient:
         assert posted_req["spec"] == "Ascend: 2 * SNT9B2"
         assert posted_req["name"] == "Train-job"
         assert posted_req["workspace_id"] == "ws-test"
+        assert posted_req["checkpoint_max_keep"] == 25
+        assert posted_req["output_retention_days"] == 30
 
     def test_save_draft(self):
         self.mock_http.post.return_value = {"payload": {"item": {"task_id": "draft1"}}}
-        result = self.client.save_draft({"name": "my-draft"})
+        req = {
+            "name": "my-draft",
+            "algorithm": {"algorithm_asset_id": "a1"},
+            "spec": "Ascend: 1 * SNT9B2",
+            "train_mode": "MODEL_TUNING",
+        }
+        result = self.client.save_draft(req)
         assert result == {"task_id": "draft1"}
         self.mock_http.post.assert_called_with(
-            f"{BASE}/v1/training/train-tasks/draft", json={"name": "my-draft", "workspace_id": "ws-test"}
+            f"{BASE}/v1/training/train-tasks/draft",
+            json={
+                **req,
+                "workspace_id": "ws-test",
+                "checkpoint_max_keep": 10,
+                "output_retention_days": 14,
+            },
         )
 
     def test_update_train_task(self):
@@ -221,7 +248,8 @@ class TestTrainClient:
 
     def test_save_draft_missing_required(self):
         with pytest.raises(ValueError, match="训练任务草稿"):
-            self.client.save_draft({})
+            self.client.save_draft({"name": "my-draft"})
+        self.mock_http.post.assert_not_called()
 
     def test_register_checkpoint_new_model_without_name(self):
         with pytest.raises(ValueError, match="NEW_MODEL"):
@@ -274,11 +302,23 @@ class TestSimRLClient:
 
     def test_create_sim_rl_task_draft(self):
         self.mock_http.post.return_value = {"payload": {"item": {"task_id": "d1"}}}
-        result = self.client.create_sim_rl_task_draft({"name": "sim-draft"})
+        req = {
+            "name": "sim-draft",
+            "config_mode": "SIMPLE",
+            "spec": "Ascend: 1 * SNT9B2",
+            "input_models": [{"model_asset_id": "m1"}],
+            "output_models": [{"model_name": "out1"}],
+        }
+        result = self.client.create_sim_rl_task_draft(req)
         assert result == {"task_id": "d1"}
         self.mock_http.post.assert_called_with(
-            f"{BASE}/v1/training/rl-tasks/simulation/draft", json={"name": "sim-draft", "workspace_id": "ws-test"}
+            f"{BASE}/v1/training/rl-tasks/simulation/draft", json={**req, "workspace_id": "ws-test"}
         )
+
+    def test_create_sim_rl_task_draft_missing_required(self):
+        with pytest.raises(ValueError, match="仿真强化学习任务草稿"):
+            self.client.create_sim_rl_task_draft({"name": "sim-draft"})
+        self.mock_http.post.assert_not_called()
 
     def test_show_sim_rl_task(self):
         self.mock_http.get.return_value = {"payload": {"item": {"task_id": "s1"}}}

@@ -27,7 +27,7 @@ pip install -r requirements-dev-editable.txt
 
 ```bash
 # Run all tests
-python -m pytest tests/ packages/ -v
+python -m pytest tests/ packages/ tools/ingestion-mock/tests/ -v
 
 # Run tests for a single package
 python -m pytest packages/cloudrobo-asset/tests/ -v
@@ -94,7 +94,7 @@ git rebase origin/master
 
 ## Pull Request Process
 
-1. Ensure your code passes all tests: `python -m pytest tests/ packages/ -v`
+1. Ensure your code passes all tests: `python -m pytest tests/ packages/ tools/ingestion-mock/tests/ -v`
 2. Update documentation if you've changed functionality
 3. Add or update tests for new features
 4. Ensure your code follows the style guidelines

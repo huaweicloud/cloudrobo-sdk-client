@@ -49,6 +49,7 @@ jobs:
           - { name: hw-cloudrobo-resource,  dir: packages/cloudrobo-resource }
           - { name: hw-cloudrobo-robot,     dir: packages/cloudrobo-robot }
           - { name: hw-cloudrobo-r2c,       dir: packages/cloudrobo-r2c }
+          - { name: hw-cloudrobo-ingestion, dir: packages/cloudrobo-ingestion }
           # ---- 主包（根目录，bundle 所有分包）----
           - { name: hw-cloudrobo-client, dir: . }
 
@@ -110,6 +111,7 @@ jobs:
           - hw-cloudrobo-resource
           - hw-cloudrobo-robot
           - hw-cloudrobo-r2c
+          - hw-cloudrobo-ingestion
 
     steps:
       - name: Download build artifacts
@@ -164,6 +166,7 @@ jobs:
           - hw-cloudrobo-resource
           - hw-cloudrobo-robot
           - hw-cloudrobo-r2c
+          - hw-cloudrobo-ingestion
 
     steps:
       - name: Download build artifacts

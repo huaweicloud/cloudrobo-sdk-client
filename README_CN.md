@@ -4,6 +4,8 @@
 
 CloudRobo 命令行工具与 Python SDK，用于华为云具身智能平台（CloudRobo）的资源管理与任务编排。
 
+全量安装与数据回流工具需要 Python ≥3.10；单独安装其他子包时以其声明为准。
+
 ## 功能特性
 
 - **资产管理**：管理模型、数据集、算法等资产的生命周期
@@ -15,6 +17,7 @@ CloudRobo 命令行工具与 Python SDK，用于华为云具身智能平台（Cl
 - **工作空间**：管理资源隔离的工作空间
 - **资源管理**：查询资源配额和资源池
 - **数据面 SDK**：机器人侧 Zenoh 数据面客户端（可选）
+- **数据回流**：后台监控就绪目录，直接上传 OBS 并向本地 Zenoh router 上报进度
 
 ## 安装
 
@@ -95,6 +98,7 @@ cloudrobo workspace list
 | cloudrobo-workspace | 工作空间 | [docs/](packages/cloudrobo-workspace/docs/index.md) |
 | cloudrobo-resource | 资源管理 | [docs/](packages/cloudrobo-resource/docs/index.md) |
 | cloudrobo-r2c | 数据面 SDK（Zenoh，重型可选依赖） | [docs/](packages/cloudrobo-r2c/docs/index.md) |
+| cloudrobo-ingestion | 跨平台本地数据回流（Python ≥3.10） | [说明与配置](packages/cloudrobo-ingestion/README.md) |
 
 ## 项目结构
 

@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package r2c_sdk;
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "DataUploadProgressProto";
+option java_multiple_files = false;
+
+message DataUploadProgress {
+  // 消息终端源: {project_id}/{device_id}
+  string source = 1;
+  // 会话开始时间（毫秒时间戳）
+  int64 timestamp = 2;
+  // 所有文件的进度节点
+  repeated UploadNode nodes = 3;
+  // 0=进行中, 1=全部成功
+  int32 task_state = 4;
+  // OBS资产路径
+  string asset_path = 5;
+}
+
+message UploadNode {
+  string file_id = 1;
+  string task_name = 2;
+  // 0-视频/1-图像/2-点云/3-文本/4-其他
+  int32 data_type = 3;
+  int64 size = 4;
+  int64 enqueue_time = 5;
+  int64 start_time = 6;
+  float progress = 8;
+  // 0=queued, 1=uploading, 2=done, 3=failed
+  int32 result_state = 9;
+  int64 eta_ms = 10;
+  double avg_bps = 11;
+  string task_type = 12;
+  string collect_method = 13;
+}

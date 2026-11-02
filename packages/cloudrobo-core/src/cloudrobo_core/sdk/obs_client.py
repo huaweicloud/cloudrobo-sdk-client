@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+import json
+from pathlib import Path
 from typing import Any, Dict, Optional
 from rich.progress import (
     Progress, BarColumn, TextColumn, TaskProgressColumn,
@@ -13,6 +15,12 @@ except ImportError as ex:
     raise ImportError("Please install esdk-obs-python SDK: pip install esdk-obs-python") from ex
 
 from cloudrobo_core.sdk.config import Config
+from cloudrobo_core.sdk.obs_diagnostics import (
+    UploadLogCapture,
+    credential_values,
+    exception_details,
+    response_details,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +29,15 @@ _OBS_ENDPOINT_ENV_KEY = "CLOUDROBO_OBS_ENDPOINT"
 
 class OBSClient:
 
-    def __init__(self, config: Optional[Config] = None, bucket_name: str = None):
+    def __init__(self, config: Optional[Config] = None, bucket_name: str = None,
+                 timeout: Optional[float] = None):
         """
         Initialize OBS client
 
         Args:
             config: Config instance, creates a default one if not provided
             bucket_name: Default bucket name
+            timeout: Optional OBS SDK socket timeout in seconds
         """
         self.config = config or Config()
         self.bucket_name = bucket_name
@@ -35,17 +45,20 @@ class OBSClient:
         self.access_key = self.config.ak
         self.secret_key = self.config.sk
         self.endpoint = self._resolve_endpoint()
+        self.last_upload_error = None
 
         # Create OBS client instance
         try:
+            options = {"timeout": timeout} if timeout is not None else {}
             self.client = ObsClient(
                 access_key_id=self.access_key,
                 secret_access_key=self.secret_key,
-                server=self.endpoint
+                server=self.endpoint,
+                **options,
             )
             logger.info("OBS client initialized successfully")
         except Exception as e:
-            logger.error(f"OBS client initialization failed: {e}")
+            logger.error("OBS client initialization failed: %s", exception_details(e, credential_values(self)))
             raise
 
     def _resolve_endpoint(self) -> str:
@@ -111,7 +124,8 @@ class OBSClient:
 
     def upload_file(self, local_path: str, obs_path: str, bucket_name: str = None,
                     enable_checkpoint: bool = True, part_size: int = 9437184,
-                    progressCallback=None) -> bool:
+                    progressCallback=None, *, progress_callback=None,
+                    checkpoint_file: Optional[str] = None) -> bool:
         """
         Upload a single file to OBS (supports large files natively with resumable upload)
 
@@ -122,10 +136,14 @@ class OBSClient:
             enable_checkpoint: Enable resumable upload, default is True
             part_size: Part size in bytes, default is 9MB (9437184)
             progressCallback: Optional callback(transferred, total, seconds) for byte-level progress
+            progress_callback: Optional snake_case alias; takes precedence over progressCallback
+            checkpoint_file: Optional caller-owned checkpoint path, outside customer data
 
         Returns:
             Return True if upload succeeds, otherwise False
+            On failure, last_upload_error contains sanitized diagnostic fields.
         """
+        self.last_upload_error = None
         if bucket_name is None:
             bucket_name = self.bucket_name
 
@@ -133,31 +151,78 @@ class OBSClient:
             raise ValueError("Bucket name cannot be empty")
 
         if not os.path.exists(local_path):
+            self.last_upload_error = exception_details(
+                FileNotFoundError(2, "Local upload file does not exist", local_path),
+                credential_values(self),
+            )
             logger.error(f"Local file does not exist: {local_path}")
             return False
 
+        callback = progress_callback if progress_callback is not None else progressCallback
+        sdk_log = getattr(self.client, "log_client", None)
+        capture = UploadLogCapture(sdk_log, credential_values(self)) if sdk_log is not None else None
+        if capture is not None:
+            self.client.log_client = capture
         try:
-            kwargs = dict(
+            options = {}
+            if callback is not None:
+                options["progressCallback"] = callback
+            if checkpoint_file is not None:
+                options["checkpointFile"] = checkpoint_file
+            response = self.client.uploadFile(
                 bucketName=bucket_name,
                 objectKey=obs_path,
                 uploadFile=local_path,
                 enableCheckpoint=enable_checkpoint,
                 partSize=part_size,
+                **options,
             )
-            if progressCallback is not None:
-                kwargs['progressCallback'] = progressCallback
-            response = self.client.uploadFile(**kwargs)
-
-            if response.status == 200:
-                if progressCallback is None:
+            if response is not None and response.status == 200:
+                if callback is None:
                     logger.info(f"File uploaded successfully: {local_path} -> {obs_path}")
                 return True
             else:
-                logger.error(f"File upload failed, status code: {response.status}")
+                self.last_upload_error = response_details(response, credential_values(self))
+                logger.error("File upload failed: %s", self.last_upload_error)
                 return False
         except Exception as e:
-            logger.error(f"File upload exception: {e}")
+            self.last_upload_error = exception_details(e, credential_values(self))
+            logger.error("File upload exception: %s", self.last_upload_error)
             return False
+        finally:
+            if capture is not None:
+                self.client.log_client = sdk_log
+                if self.last_upload_error and capture.messages:
+                    self.last_upload_error["sdk_errors"] = list(capture.messages)
+
+    def abort_checkpoint_upload(self, checkpoint_file: str) -> bool:
+        """Abort an interrupted SDK upload before discarding its local checkpoint.
+
+        Checkpoints must be owned by the caller, outside the customer source.
+        Returns False on an unconfirmed abort so the caller can retry cleanup.
+        """
+        path = Path(checkpoint_file)
+        if not path.exists():
+            return True
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            upload_id = record.get("uploadId")
+            if upload_id:
+                response = self.client.abortMultipartUpload(
+                    record["bucketName"], record["objectKey"], upload_id)
+                if not (200 <= response.status < 300 or response.status == 404):
+                    return False
+            path.unlink()
+            return True
+        except (OSError, ValueError, KeyError, TypeError):
+            logger.warning("Could not clean up upload checkpoint %s", path.name)
+            return False
+        except Exception as exc:
+            logger.warning("OBS multipart cleanup failed: %s", type(exc).__name__)
+            return False
+
+    def close(self):
+        self.client.close()
 
     def download_file(self, obs_path: str, local_path: str, bucket_name: str = None,
                       enable_checkpoint: bool = True, part_size: int = 5242880,

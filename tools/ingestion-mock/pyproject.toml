@@ -1,0 +1,24 @@
+# Repository-only developer tool. Excluded from customer bundles and release workflows.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cloudrobo-ingestion-mock"
+version = "0.0.0"
+description = "Internal foreground scenarios for CloudRobo ingestion progress testing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+    "hw-cloudrobo-ingestion",
+    "hw-cloudrobo-r2c[client]",
+    "click>=8",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "setuptools>=77", "wheel", "packaging", "PyYAML"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cloudrobo_ingestion_mock*"]

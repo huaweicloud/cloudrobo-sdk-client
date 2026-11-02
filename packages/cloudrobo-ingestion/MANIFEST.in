@@ -1,0 +1,4 @@
+include README.md
+recursive-include examples *.yaml
+recursive-include benchmarks *.py
+recursive-include tests *.py

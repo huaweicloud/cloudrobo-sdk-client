@@ -137,3 +137,31 @@ class IValueTransformer(ABC):
         Subclasses that accept configuration override this to perform
         early schema checks.  The default implementation is a no-op.
         """
+
+
+class IPolicyClient(ABC):
+    """Cloud-side inference client boundary abstraction.
+
+    Implementations (WebSocket / HTTP / local runner) send a payload to an
+    inference service and return the response as a dict. Lives beside
+    ``IModelTranslator`` as part of the cloud-side model boundary.
+
+    Lifecycle contract: ``connect`` must be idempotent (safe to call multiple
+    times and after ``close``); ``infer`` must not be called before ``connect``;
+    ``close`` releases the underlying resources and is also idempotent.
+    """
+
+    @abstractmethod
+    def connect(self) -> None:
+        """Establish/prepare the underlying connection. Idempotent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def infer(self, payload: Any) -> Dict[str, Any]:
+        """Send payload to the inference service and return the response."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def close(self) -> None:
+        """Clean up underlying resources."""
+        raise NotImplementedError

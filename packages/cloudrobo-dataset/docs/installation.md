@@ -154,9 +154,6 @@ cloudrobo dataset proc get-log --task-id <id> --file-name system-std-output.log 
 # 查看用户日志
 cloudrobo dataset proc get-log --task-id <id> --is-system false
 cloudrobo dataset proc get-log --task-id <id> --file-name job-std-output.log --file-path "<path>"
-
-# 重启任务
-cloudrobo dataset proc restart-task --task-id <id>
 ```
 
 **Agent 自然语言触发**：`任务 ik-task-01 失败了，帮我看看日志`
