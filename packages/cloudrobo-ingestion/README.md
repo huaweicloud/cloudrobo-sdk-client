@@ -1,351 +1,60 @@
 # CloudRobo 数据回流工具
 
-跨平台后台监控客户目录，将完整批次直接上传 OBS，每秒向本地 Zenoh router
-发布 `r2c_sdk.DataUploadProgress`。依赖 `hw-cloudrobo-core` 和
-`hw-cloudrobo-r2c[client]`，复用现有配置、OBS SDK、Zenoh transport 和 Protobuf。
-本工具不负责 router 后续转发及云端接收确认。
+`hw-cloudrobo-ingestion` 在 Linux、Windows、macOS 后台监控就绪数据目录，先复制本地工作副本，再将文件直接上传 OBS。默认模式通过本地 Zenoh router 发布 Protobuf 进度，支持仅上传模式、失败重试和中断恢复。
 
-## 运行模式
+OBS 文件不经过 CloudRobo 云端；本工具负责本地上传和向 router 发布状态，不负责后续云端转发及接收确认。依赖并复用 `hw-cloudrobo-core`、`hw-cloudrobo-r2c[client]`。
 
-工具使用顶层 `run_mode` 选择业务行为，`zenoh.mode` 只表示通信模式：
+## 安装
 
-| run_mode | OBS 上传 | Zenoh 上报 | 配置示例 |
-|---|---|---|---|
-| upload_and_report（默认） | 真实上传 | 每秒真实进度 | [ingestion.yaml](examples/ingestion.yaml) |
-| upload_only | 真实上传 | 未启用 | [upload-only.yaml](examples/upload-only.yaml) |
-
-旧配置未设置 `run_mode` 时保持默认行为。两种模式共享用户级单实例控制，
-同一时刻仅运行一个。默认模式和仅上传模式共用工作目录及成功记录。
+要求 Python ≥3.10。已发布包安装：
 
 ```bash
-cloudrobo ingestion start --config upload-only.yaml
-# 切换真实上传模式：先停止，再使用同一配置和工作目录启动
-cloudrobo ingestion stop
-cloudrobo ingestion start --config ingestion.yaml --run-mode upload_only
-# 恢复上报，已经成功的批次不会重复上传
-cloudrobo ingestion stop
-cloudrobo ingestion start --config ingestion.yaml --run-mode upload_and_report
+python -m pip install hw-cloudrobo-ingestion
+# 可选 LeRobot V3 格式校验，不安装整个 LeRobot：
+python -m pip install "hw-cloudrobo-ingestion[lerobot-validation]"
 ```
 
-## 安装和启动
+从当前仓库安装、Windows 虚拟环境和 OBS 凭证配置见[安装与配置](docs/installation.md)。
 
-需要 Python >=3.10。可安装完整 Client 或单独安装回流包：
+## 快速开始
+
+准备源目录、独立的工作目录和实际 OBS 桶，按[使用手册](docs/user-guide.md#回流配置文件)创建配置。仅 `source_dir` 下一层目录中的空普通文件 `__UPLOAD_READY__` 会触发整个批次上传；数据写完后最后创建标记。
+
+```text
+source_dir/
+  batch001/
+    data/...
+    __UPLOAD_READY__
+```
 
 ```bash
-pip install hw-cloudrobo-ingestion
-# 可选的格式检查（不安装整个 LeRobot）
-pip install 'hw-cloudrobo-ingestion[lerobot-validation]'
-
 cloudrobo ingestion start --config ingestion.yaml
 cloudrobo ingestion status
 cloudrobo ingestion status --json
 cloudrobo ingestion stop
 ```
 
-开发环境安装后，需执行 R2C 自带的 Protobuf 编译命令生成新消息；正常 wheel
-构建自动编译：
+可直接参考[默认模式配置](examples/ingestion.yaml)和[仅上传配置](examples/upload-only.yaml)，相对目录按配置文件位置解析。首个批次的完整操作见[使用示例](docs/examples.md)。
 
-```bash
-python -c 'from cloudrobo_r2c._build_commands import compile_protobuf_files; compile_protobuf_files()'
-```
+## 运行模式与约束
 
-## 配置
+| 模式 | OBS 上传 | Zenoh 上报 |
+|---|---|---|
+| `upload_and_report`（默认） | 开启 | 开启 |
+| `upload_only` | 开启 | 关闭 |
 
-默认模式下源目录、工作目录、OBS URI、`task_type` 和 `collect_method` 必填。
-只上传模式允许省略两个分类字段，并忽略不使用的 Zenoh 配置；提供分类时仍校验。
-分类必须为长度 1～64 的字符串（按 Unicode 字符计数）。
-配置中的源/工作相对目录按原配置文件位置解释；CLI 路径按当前工作目录解释。
-Windows 推荐使用 `C:/data/source` 或单引号路径。
-OBS 使用现有 `cloudrobo config`、`HUAWEI_CLOUD_AK`、`HUAWEI_CLOUD_SK`、
-`CLOUDROBO_OBS_ENDPOINT` 等配置，不将密钥写入回流数据库。
+- 两种模式共享工作目录和成功历史，切换前先停止进程；同一用户默认单实例。
+- 每批默认最多 50 个普通文件，可配置；标记后内容保持不变，批次路径不可复用。
+- 工作目录绑定源目录，不绑定 OBS 目标；不要删除历史数据库来处理普通网络问题。
+- 当前上传批次约每秒上报完整进度；成功结果最多三次，失败结果正常一次，均以本地调用返回计数。
+- 最终结果在首次入队起 24 小时后停止补报；本地发布成功不承诺云端收到。
 
-Zenoh 默认 client 模式连接 `tcp/127.0.0.1:7447`，source=`r2c/local`，
-topic=`r2c/local/data_ingestion/upload_status`。支持 R2C ClientConfig 的 TLS、
-connect 和 publisher 选项；身份不允许包含 `/` 或通配符。默认 BACKGROUND/DROP，
-因此发布调用完成不表示 router 或云端已经接收，拥塞期间也可能丢样本。
+## 文档导航
 
-### CLI 覆盖
-
-`--config` 仍必需。优先级为 **显式 CLI 参数 > 配置文件 > 默认值**。
-未传入的参数不覆盖 YAML；显式关闭和零值仍生效。后台使用合并后的配置，
-原 YAML 不会改写。临时有效配置文件权限受限，启动成功或失败后删除。
-
-| 配置 | CLI |
-|---|---|
-| 运行模式 | `--run-mode` |
-| 路径 | `--source-dir`、`--work-dir`、`--obs-path` |
-| 分类 | `--task-type`、`--collect-method` |
-| 每批文件数上限 | `--max-files-per-batch` |
-| 校验开关 | `--validate-lerobot` / `--no-validate-lerobot` |
-| Zenoh 通信模式 | `--zenoh-mode` |
-| 地址列表 | 可重复的 `--zenoh-endpoint` |
-| 身份 | `--zenoh-project-id`、`--zenoh-device-id`、`--zenoh-client-id` |
-
-CLI 地址整体替换 `zenoh.endpoints` 和实际的 `zenoh.connect.endpoints`，
-保留 connect 超时等其他项。TLS、publisher 等高级设置只通过 YAML 配置。
-
-## 客户目录约定
-
-```text
-source/
-  __UPLOAD_READY__         # 忽略，不上传 source 本身
-  batch-001/
-    __UPLOAD_READY__       # 所有写入关闭后，最后创建的空文件
-    meta/...
-    data/...
-    videos/...
-    nested/
-      __UPLOAD_READY__     # 忽略，不单独触发任务，也不上传标记
-      data.parquet         # 随 batch-001 上传
-  unmarked/
-    nested/
-      __UPLOAD_READY__     # 不触发上传，unmarked 缺少直接标记
-```
-
-后台扫描线程仅检查源目录的直接子目录，目标轮询间隔为 2 秒；大目录一轮可能超过
-2 秒，不启动重叠扫描，也不阻塞主进程处理上传事件、状态刷新及停止请求。
-只有直接子目录中的空标记才触发整个子目录上传。
-源目录根部和更深层的标记不触发任务，也不会导致嵌套批次报错。
-有效批次内部仍递归收集普通数据文件，所有层级的标记均不复制、不上传、不计数。
-标记创建后目录必须保持不变，批次路径不可复用。
-LeRobot V3 应在 `finalize()` 完成后于整个数据集根目录创建标记，不要仅标记 data
-或 videos 子目录。无标记目录不会上传。
-
-单个子目录的权限或读取异常不会中断其他目录的发现，也不会创建上传失败批次；
-尚未登记的目录在扫描期间消失则直接跳过。`status` 和日志展示异常目录、原因及
-错误 ID，暂时访问异常会继续尝试，恢复后清除当前异常。源目录整体不可访问时，
-暂停发现和启动新上传批次，已运行上传、清理和进度发布继续。
-
-发现就绪目录后先保存批次并在本地排队，按首次入队时间及路径选择可处理的批次。
-内存最多保留当前处理批次和一个候选批次的文件清单；文件明细要等该批次实际开始上传，
-或产生可上报的失败结果后才在云端出现。文件数和标记有效性在进入清单窗口时检查。
-失败退出窗口后释放文件节点，保留必要的最新失败结果，重试时重建清单。
-结果从数据库一次加载一条，上报仅保留当前上传进度和一条待发送结果，最多 2 个槽位；router 断连时仍可
-继续上传，待发布结果留在数据库，不把积压消息全部加载进内存。
-
-每批默认最多 **50** 个普通文件，通过顶层 `max_files_per_batch` 配置，或使用
-`--max-files-per-batch` 覆盖。该值必须为正整数，不接受布尔值、字符串或小数，
-没有固定的 5,000 上限。例如 `max_files_per_batch: 5000` 可允许一批 5,000 个文件。
-此限制适用于两个真实上传模式。
-初次扫描、重试和复制复查均使用当前有效上限，超限拒绝整个批次，不复制、不上传。
-扫描拒绝的提示为“该批次已被拒绝，本次运行不再处理。请手动解决上述扫描问题，
-然后重启数据回流工具。”修正数据后仍需重启；不增加自动复查拒绝批次或重试命令。
-源目录只读，禁止
-源目录与工作目录重叠、符号链接或 Windows junction。复制完成且可选校验通过后
-才开始上传，OBS 保留相对源目录结构，标记不上传，本地删除不会删除 OBS 对象。
-
-## 恢复和结果
-
-真实上传模式的工作目录包含 `mode.json`、`batches.sqlite3`、`staging/`、
-`checkpoints/` 和轮转日志。`mode.json` 标识真实上传工作目录，两种真实模式可以复用。
-旧的模式隔离结构（`mode.json` 未标识 `purpose: upload`）需要更换为空目录。
-已采用当前真实上传结构的工作目录可直接复用，本次扫描改造不要求清空上传历史。
-数据库保存批次记录、冻结的成功/失败结果及发送次数，不保存逐秒快照或逐文件恢复进度；
-首次入队时间和批次 UUID 持久化。
-文件 UUIDv5 从批次 UUID 和相对路径派生，重试/重启稳定。
-
-### 上传失败与重试的展示
-
-一次批次处理失败时，已完成文件保持 `done`，其余文件统一显示 `failed`，
-包括因复制、OBS 初始化或前面的文件失败而未能开始上传的文件；这里的失败
-表示“本轮批次处理未完成”，不表示该文件曾经实际发起过 OBS 请求。
-子进程启动失败、异常退出、读取清单失败等也会更新已知文件清单的失败状态。
-尚未建立合法清单（如首次发现就超限）的错误仍仅在本地状态和日志展示。
-
-等待重试、重新复制和初始化期间保留失败状态，不重置为排队。每个文件真正
-开始新一轮 OBS 上传时才变为 `uploading`，字节进度、开始时间、速率及 ETA
-重新计算，成功后变为 `done`。整批重传时，上轮已完成的文件也会再次进入上传中。
-迟到的 OBS 回调不会将已完成或已失败状态改回上传中。
-
-重启不还原逐文件进度，不新增周期快照：根据批次尝试次数及错误记录，
-将未完成旧批次的文件重建为失败／待重试；从未开始处理的新批次仍为排队。
-恢复后的开始时间、速率、ETA 清零，批次 UUID、文件 UUID 和首次入队时间保持不变。
-已记录整批成功的任务继续跳过。
-
-失败会冻结本次尝试的完整结果，按发送节拍正常发布一次，不安排随机重复补发。
-发布调用异常时保留结果并重试，调用正常返回后清理失败消息缓存。
-开始重试时取消旧失败结果剩余补发，重新复制和校验期间不上报周期进度。
-子进程异常退出按失败
-进入 5～300 秒退避，避免立即重试覆盖失败状态；用户主动停止仍作为中断处理。
-上报通道故障不改变真实上传结果，恢复后补报最新状态。工具不累积失败历史，
-断连期间被后续成功覆盖的中间失败不保证重放，也不承诺云端已接收。
-
-成功或失败都清理数据副本。复制/上传错误按 5～300 秒退避重试，每次重新复制
-并整批重传，可能覆盖之前上传成功的对象；OBS 上可能存在未完成批次的部分文件。
-拒绝类错误本次运行不重复尝试，修正后下次启动重新检查。成功批次不会重传。
-工作目录只绑定源目录，不绑定 OBS 地址。更换源目录仍需要新工作目录。
-
-### 模式切换与补报
-
-两种真实模式共用成功记录，切换不会重新上传已成功的批次；未完成批次保持 UUID、
-首次入队时间并继续整批重试。默认模式建立的批次标记为已纳入上报，切到仅上传时
-暂停发布；这些批次在仅上传期间成功后保存一次最终结果 JSON，切回默认时补报成功。
-所有成功、失败结果的补报期限均为批次**首次入队时间起 24 小时**，不是上传完成时间；重试、重启和切换模式
-均不延长期限。距首次入队未满 24 小时，副本清理或已完成源批次被移走后仍能补齐结果；
-满 24 小时后，无论已发送 0、1、2 次，均清除待补报结果并记录日志，保留批次记录，
-不改变成功历史或失败批次原有的上传重试安排。
-即使刚在仅上传模式完成，如果批次首次入队已满 24 小时，也不再补报。
-切回默认后 router 持续不可用，到期时同样停止补报；已经开始的发布调用无法撤回。
-此期限同样限制默认模式自身的最终结果及其剩余重复发送，未曾成功发布的过期结果也不再首发。
-未完成批次仍可继续上传及上报实时进度；首次入队已满 24 小时的批次不再安排最终结果发送。
-已有工作目录保留上传历史，并为所有仍保留的结果按原首次入队时间计算期限。
-
-仅上传期间新建且已完成的批次不会在以后补报。尚未完成的批次切回默认时开始上报，
-缺失的分类从当前配置补齐并固定，已有分类保持不变。最终成功结果替代过时的失败消息；
-成功结果完成三次、失败结果完成一次本地发布后清除待发布内容，上传成功记录长期保留。切换模式沿用相同的
-Zenoh 身份和 topic，不提供跨身份迁移。
-
-仅上传模式不初始化 Zenoh、不导入 Protobuf、不生成 Protobuf 上报缓存，本地进度仍可查询；
-只为原有上报任务保留必要的最终结果 JSON。
-
-### 修改 OBS 地址
-
-修改配置或使用 `--obs-path` 后重新启动：已成功批次保持原实际地址，不自动重传，
-其待补报结果也保持原地址；未完成批次更新为新目标并整批重试，新批次使用新目标。
-批次身份和首次入队时间保持不变，日志记录目标变化及受影响批次数量。
-旧目标已上传的对象不会自动删除；旧 checkpoint 按原 bucket 和对象路径清理，
-清理未确认时暂停该批次，不会将旧分段上传复用到新地址。
-
-`stop` 尽快停止当前子进程，超过 5 秒终止；未完成批次下次启动重新复制。
-OBS SDK checkpoint 独立于副本，确认分段上传中止后删除；强制终止时可能有远端
-残留分段，建议桶设置清理未完成 multipart 的生命周期策略作为兜底。
-清理失败不丢记录，暂停该批次并继续其他任务。
-
-### 错误提示与日志
-
-`status` 分别展示 **OBS 上传异常、进度上报异常、本地处理异常**，包括中文原因、
-失败阶段、文件或地址、排查建议及错误 ID。上传成功与进度上报成功分别判断，
-上报失败不会改写 OBS 上传结果。对应操作恢复成功后清除当前异常，日志记录恢复事件。
-仅上传模式始终显示“上报未启用”。
-
-例如 endpoint 无法解析时：
-
-```text
-OBS 上传异常 [OBS_DNS_FAILED]
-阶段：上传 OBS 文件
-原因：OBS 上传失败：无法解析服务器地址
-endpoint：https://obs.example.invalid
-file：data/chunk-000/file-000.parquet
-建议：请检查服务器地址、区域配置和本机 DNS。
-错误 ID：……
-```
-
-router 无法连接时显示“进度上报异常”，附带连接地址和 topic。进度消息构建失败
-属于“本地处理异常 / 构建进度消息”，不会误报为 router 故障。未知原因保留原始诊断，
-明确提示失败模块，不将所有 `OSError` 都解释成地址、网络或权限问题。
-
-`status --json` 的顶层、`batch_errors` 和 `reporter` 使用统一 `error_info`：
-`error_id`、`component`（obs/report/local）、`stage`、`code`、`message`、`hint`、
-`time_ms`、`context`、`details`。Reporter 的 `errors` 可同时包含连接或消息构建错误。
-`scan` 展示扫描状态、最近完整扫描时间、本轮已检查目录数、异常总数及等待建立清单
-的批次数；`scan_errors` 最多保留最近 50 条扫描诊断，源目录整体异常优先保留。
-普通 `status` 同样显示这些信息，离线查询使用最后保存的快照。
-批次诊断持久化，支持离线查询；致命退出尽可能保存 `state=failed`，与正常停止区分。
-如果无法读取实例锁，显示“状态无法确定”及失败路径。错误 ID 用于关联状态与详细日志。
-
-上传子进程返回失败后立即更新本地批次状态，并按发送节拍上报未完成文件的失败状态；等待清理
-及重试期间保持失败，开始下一次实际上传后才恢复为上传中。子进程结束时的管道关闭
-（包括 Windows `WinError 109`、EOF、断管或连接重置）不会覆盖已返回的 OBS 错误或
-导致主进程退出。若管道关闭前未收到结果，则将未完成文件标为失败，待子进程退出后
-记录子进程异常并安排重试，不将断管视为上传成功。
-
-日志位于本次运行实际使用的 `work_dir/ingestion.log`（包括 CLI `--work-dir`
-覆盖后的目录），单文件最大 5 MiB，保留 3 份轮转备份 `ingestion.log.1`～`.3`。
-上传子进程通过 IPC 将日志交给主进程统一写入，记录批次 ID、失败阶段、文件、
-本地副本和 OBS 目标。OBS 失败时记录可用的 HTTP 状态码、错误码、请求 ID；
-异常保留原因链、脱敏消息、errno/Windows winerror 和调用栈位置，不记录凭证、签名
-查询参数或栈局部变量。重复的上报异常首次立即记录，其后同类错误每 60 秒汇总次数；
-错误变化与恢复立即记录。上报只保留当前诊断，不累积逐次重试历史。
-
-Windows PowerShell 实时查看（将路径替换为实际工作目录）：
-
-```powershell
-cloudrobo ingestion status --json
-Get-Content 'C:\data\ingestion-work\ingestion.log' -Tail 100 -Wait
-```
-
-例如 `OBS_ACCESS_DENIED` 加 HTTP 403 / `AccessDenied` 表示 OBS 访问被拒绝；
-`stage=copying` 加 `winerror` 表示复制阶段的 Windows 文件操作错误。
-诊断字段和扫描状态支持当前真实上传工作目录；更早的模式隔离目录按前述说明处理。
-
-只有当前批次从第一个文件实际开始上传后才约每秒发送全量节点，不限制为 8 KB。
-扫描、排队、复制、校验、OBS 初始化及候选批次预取清单期间不发送周期消息。
-复制、校验或初始化失败时，有合法文件清单的批次仍发送失败结果；空批次直接发送成功结果。
-状态变化只更新最新快照，不能绕过同批次至少 1 秒的发布间隔；客户进程任意两次发布
-启动时间至少间隔 200 ms。历史结果补发与当前进度错开发送，整个进程可能每秒发送多条消息。
-
-成功结果最多发送三次完全相同的快照，失败结果正常发送一次；发布异常不计数，沿用连接重试。
-第一次在满足节拍后的最早时机发送，成功结果后两次各自随机等待 1～5 秒；上一批补发不阻塞下一批
-OBS 上传。等待中的结果保存于 SQLite，不占用内存发布槽位；次数和下次时间持久化，停止不
-等待补发，重启恢复剩余次数。发布返回后、次数落库前崩溃可能额外重复，不承诺绝对恰好三次。
-发布回执按快照版本和轮次去重，旧结果回执不能清理新结果。日志记录轮次、消息大小、耗时、
-下次时间及取消/过期原因；`status` 和 JSON 中的 `reporter.pending_result_batches` 展示待补发批次数。
-三次成功仅指本地调用正常返回，不是云端接收确认。
-
-断连期间只保留最新快照及待发布结果，不积压逐秒历史。超限等无法生成完整节点清单的错误通过
-本地 status/log 展示；现有协议没有错误原因字段。
-
-## 可选 LeRobot 校验
-
-`validation.enabled: false`（默认）无需 PyArrow 校验依赖；开启时缺依赖会在启动
-报错，不静默跳过。第一版针对标准 Parquet/MP4 的 `codebase_version: v3.0`，
-以 LeRobot v0.4.3 的标准布局为依据，要求 `meta/tasks.parquet`。
-检查 info/stats、Parquet schema/footer、episode 引用/范围、视频容器/视频流，
-不自动修复、不逐帧解码、不评判训练质量；不支持 Lance 和内嵌 image 特征。
-校验副本失败不上传、清理副本、记录拒绝原因。关闭校验可上传其他普通数据格式。
-
-## 开发自测
-
-Mock 已移至独立前台开发入口，不属于客户运行模式，也不接受客户配置中的
-`mock` 或 `run_mode: mock_report`。场景、参数和云端验收步骤见
-[开发测试说明](../../tools/ingestion-mock/README.md)。
-
-## 平台与验收
-
-不依赖 Unix 信号完成生命周期控制，使用后台 subprocess、平台文件锁与认证的
-loopback 控制通道。每个操作系统用户单实例，控制登记在 `~/.cloudrobo/ingestion`。
-`CLOUDROBO_INGESTION_RUNTIME_DIR` 可指定独立登记位置（主要用于测试/受管理部署）；
-不同登记目录会形成独立实例域。工作目录应由该用户独占，不要手动修改 SQLite。
-
-跨平台自动化 CI 与真实 OBS/router 联调分开。性能验收需在目标机器人及客户实际
-数据上测量：单个 5,000 文件批次运行 30 分钟，序列化 p95 ≤200 ms、发布间隔
-p95 ≤1.2 秒、OBS 吞吐相对关闭上报下降 ≤5%。通过单元测试不代表满足这些指标。
-
-权限测试按平台执行：Linux/macOS 检查宽松 `umask` 下副本文件 `0600`、目录 `0700`；
-Windows 使用系统 PowerShell 的 `Get-Acl` 和数字 SID，验证副本不继承测试父目录的宽泛访问权限，
-同时检查当前用户可读写、清理副本，源文件内容及 ACL 不变。该用例自动纳入现有 Windows
-Python 3.10/3.12 CI；缺少所需系统工具时测试失败，不会静默跳过 Windows 权限检查。
-Windows 副本目录在创建时通过系统 API 设置受保护的 ACL，兼容尚不支持 `mkdir(0700)`
-权限处理的 Python 3.10.11；仅允许系统、管理员和所有者访问，不修改源目录的 ACL。
-
-可复现的序列化微基准（输出机器信息、消息大小和 p95；不发送数据）：
-
-```bash
-python packages/cloudrobo-ingestion/benchmarks/serialize.py --files 5000 --iterations 100
-```
-
-扫描规模微基准（临时构造目录，结束后清理，不连接 OBS 或 Zenoh）：
-
-```bash
-python packages/cloudrobo-ingestion/benchmarks/scan.py --mode history --directories 10000
-python packages/cloudrobo-ingestion/benchmarks/scan.py --mode backlog --directories 10000
-python packages/cloudrobo-ingestion/benchmarks/scan.py --mode mixed --directories 10000
-```
-
-开发机实测：macOS 27.0.1 / ARM64 / 12 逻辑 CPU，Python 3.10.19。
-目录和历史数据库预先构造；每个待上传目录包含一个小文件。测量从启动扫描到首轮
-完成全部登记，主循环按 50 ms 间隔消费，启用 SQL 写操作计数，未执行真实上传或发布。
-
-| 场景 | 目录数 | 首轮完成（秒） | CPU 时间（秒） | 进程峰值 RSS（MiB） | 首批清单（ms） | SQL 写操作数 |
-|---|---:|---:|---:|---:|---:|---:|
-| 全部为历史目录 | 1,000 | 0.060 | 0.006 | 36.38 | — | 0 |
-| 全部为历史目录 | 10,000 | 0.258 | 0.036 | 40.11 | — | 0 |
-| 全部为待上传目录 | 1,000 | 2.154 | 0.365 | 34.20 | 187.31 | 1,002 |
-| 全部为待上传目录 | 10,000 | 21.716 | 4.097 | 38.67 | 199.15 | 10,002 |
-| 历史／待上传各半 | 1,000 | 1.135 | 0.175 | 34.25 | 198.69 | 502 |
-| 历史／待上传各半 | 10,000 | 11.034 | 2.096 | 39.78 | 200.42 | 5,002 |
-
-上述场景单次主循环处理 p95 ≤14.65 ms，状态快照查询最长 2.70 ms；结果队列 ≤32、
-清单窗口 ≤2、发布槽位 ≤2（本基准无待补报结果）。含待补报和断连的自动化测试另行
-验证总发布槽位 ≤3。Windows 的标准库不提供 `resource.getrusage`，脚本的 RSS 字段
-在该平台输出 `null`。这些小文件测量不代表客户大数据集或真实 OBS 吞吐验收结果。
+- [模块概览](docs/index.md)
+- [安装与配置](docs/installation.md)
+- [CLI 命令](docs/commands.md)
+- [使用示例](docs/examples.md)
+- [完整使用手册](docs/user-guide.md)
+- [开发与验证](docs/development.md)
+- [独立 Mock 开发工具](../../tools/ingestion-mock/README.md)

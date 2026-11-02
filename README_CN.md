@@ -17,7 +17,7 @@ CloudRobo 命令行工具与 Python SDK，用于华为云具身智能平台（Cl
 - **工作空间**：管理资源隔离的工作空间
 - **资源管理**：查询资源配额和资源池
 - **数据面 SDK**：机器人侧 Zenoh 数据面客户端（可选）
-- **数据回流**：后台监控就绪目录，直接上传 OBS 并向本地 Zenoh router 上报进度
+- **数据回流**：本地数据上传 OBS，可通过 Zenoh 上报进度
 
 ## 安装
 
@@ -98,7 +98,7 @@ cloudrobo workspace list
 | cloudrobo-workspace | 工作空间 | [docs/](packages/cloudrobo-workspace/docs/index.md) |
 | cloudrobo-resource | 资源管理 | [docs/](packages/cloudrobo-resource/docs/index.md) |
 | cloudrobo-r2c | 数据面 SDK（Zenoh，重型可选依赖） | [docs/](packages/cloudrobo-r2c/docs/index.md) |
-| cloudrobo-ingestion | 跨平台本地数据回流（Python ≥3.10） | [说明与配置](packages/cloudrobo-ingestion/README.md) |
+| cloudrobo-ingestion | 跨平台本地数据回流（Python ≥3.10） | [docs/](packages/cloudrobo-ingestion/docs/index.md) |
 
 ## 项目结构
 
@@ -116,7 +116,8 @@ cloudrobo-client/
 │   ├── cloudrobo-dispatch/      # 智能体调度
 │   ├── cloudrobo-workspace/     # 工作空间
 │   ├── cloudrobo-resource/      # 资源管理
-│   └── cloudrobo-r2c/           # 数据面 SDK
+│   ├── cloudrobo-r2c/           # 数据面 SDK
+│   └── cloudrobo-ingestion/     # 本地数据回流与进度上报
 ├── docs/                        # 项目级文档
 └── pyproject.toml               # 聚合安装配置
 ```

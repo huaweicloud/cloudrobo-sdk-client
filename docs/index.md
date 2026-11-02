@@ -22,3 +22,4 @@
 | 工作空间 | 工作环境管理 | [docs/](../packages/cloudrobo-workspace/docs/index.md) |
 | 资源管理 | 资源配额和资源池查询 | [docs/](../packages/cloudrobo-resource/docs/index.md) |
 | 数据面 SDK | R2C | [docs/](../packages/cloudrobo-r2c/docs/index.md) |
+| 数据回流 | 本地数据上传 OBS 与进度上报 | [docs/](../packages/cloudrobo-ingestion/docs/index.md) |
