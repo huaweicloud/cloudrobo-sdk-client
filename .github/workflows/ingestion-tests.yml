@@ -2,7 +2,37 @@ name: Ingestion cross-platform tests
 
 on:
   push:
+    branches: [main]
+    paths:
+      - 'packages/cloudrobo-ingestion/**'
+      - 'tools/ingestion-mock/**'
+      - 'packages/cloudrobo-core/**'
+      - 'packages/cloudrobo-r2c/**'
+      - 'packages/cloudrobo-workspace/**'
+      - 'packages/cloudrobo-resource/**'
+      - 'pyproject.toml'
+      - 'requirements-dev-editable.txt'
+      - '.github/scripts/sync_version.py'
+      - '.github/workflows/ingestion-tests.yml'
+      - '.github/workflows/publish-to-pypi.yml'
+      - '!**/*.md'
+      - '!**/docs/**'
   pull_request:
+    paths:
+      - 'packages/cloudrobo-ingestion/**'
+      - 'tools/ingestion-mock/**'
+      - 'packages/cloudrobo-core/**'
+      - 'packages/cloudrobo-r2c/**'
+      - 'packages/cloudrobo-workspace/**'
+      - 'packages/cloudrobo-resource/**'
+      - 'pyproject.toml'
+      - 'requirements-dev-editable.txt'
+      - '.github/scripts/sync_version.py'
+      - '.github/workflows/ingestion-tests.yml'
+      - '.github/workflows/publish-to-pypi.yml'
+      - '!**/*.md'
+      - '!**/docs/**'
+  workflow_dispatch:
 
 permissions:
   contents: read

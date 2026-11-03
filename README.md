@@ -1,7 +1,5 @@
 # CloudRobo Client
 
-Local data ingestion is available through `cloudrobo ingestion start/status/stop`.
-See [ingestion setup, configuration and recovery](packages/cloudrobo-ingestion/README.md).
 The full bundle requires Python >=3.10; individual legacy packages retain their own requirements.
 
 CloudRobo command-line tool and Python SDK for Huawei Cloud's Embodied Intelligence Platform (CloudRobo) - resource management and task orchestration.
@@ -19,6 +17,7 @@ CloudRobo command-line tool and Python SDK for Huawei Cloud's Embodied Intellige
 - **Workspace Management**: Manage resource-isolated workspaces
 - **Resource Management**: Query resource quotas and resource pools
 - **Data Plane SDK**: Robot-side Zenoh data plane client (optional)
+- **Data Ingestion**: Upload local data to OBS with optional Zenoh progress reporting
 
 ## Installation
 
@@ -99,6 +98,7 @@ Each functional module's documentation is maintained by its respective package:
 | cloudrobo-workspace | Workspace Management | [docs/](packages/cloudrobo-workspace/docs/index.md) |
 | cloudrobo-resource | Resource Management | [docs/](packages/cloudrobo-resource/docs/index.md) |
 | cloudrobo-r2c | Data Plane SDK (Zenoh, heavy optional dependencies) | [docs/](packages/cloudrobo-r2c/docs/index.md) |
+| cloudrobo-ingestion | Cross-platform local data uploads and progress reporting | [docs/](packages/cloudrobo-ingestion/docs/index.md) |
 
 ## Project Structure
 
@@ -116,7 +116,8 @@ cloudrobo-client/
 │   ├── cloudrobo-dispatch/      # Task dispatch
 │   ├── cloudrobo-workspace/     # Workspace management
 │   ├── cloudrobo-resource/      # Resource management
-│   └── cloudrobo-r2c/           # Data Plane SDK
+│   ├── cloudrobo-r2c/           # Data Plane SDK
+│   └── cloudrobo-ingestion/     # Local data ingestion and progress reporting
 ├── tools/ingestion-mock/         # Developer-only foreground tests (not published)
 ├── docs/                        # Project-level documentation
 └── pyproject.toml               # Aggregate installation configuration
