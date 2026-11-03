@@ -6,9 +6,15 @@ Simulates a cloud-side publisher sending action commands to a robot.
 Topic:
     {project_id}/{device_id}/inference/actions
 
-Bundle-only usage:
+Bundle usage:
     python examples/action_publisher.py --bundle /path/to/cert_xxx.zip
     python examples/action_publisher.py --bundle /path/to/unpacked_bundle_dir
+
+Compatible advanced usage (no bundle):
+    python examples/action_publisher.py \
+        --client-id action-pub-01 \
+        --endpoints tcp/127.0.0.1:7447 \
+        --mode peer
 """
 
 from __future__ import annotations
@@ -17,10 +23,47 @@ import argparse
 import logging
 import random
 import time
+from typing import List, Optional
 
-from cloudrobo_r2c import R2CClient
+from cloudrobo_r2c import ClientConfig, R2CClient
 
 logger = logging.getLogger(__name__)
+
+
+def parse_endpoints(raw: Optional[str]) -> List[str]:
+    """Parse comma-separated endpoints."""
+    if not raw:
+        return []
+    return [ep.strip() for ep in raw.split(",") if ep.strip()]
+
+
+def build_client(args: argparse.Namespace):
+    """Build client session from bundle or explicit ClientConfig."""
+    if args.bundle:
+        logger.info("Connecting with platform credential bundle: %s", args.bundle)
+        if args.client_id:
+            logger.info("Using client_id override: %s", args.client_id)
+        return R2CClient.connect(args.bundle, client_id=args.client_id)
+
+    resolved_client_id = args.client_id or "action-pub-01"
+    config = ClientConfig(
+        project_id=args.project_id,
+        device_id=args.device_id,
+        client_id=resolved_client_id,
+        endpoints=parse_endpoints(args.endpoints),
+        endpoint_role=args.endpoint_role,
+        mode=args.mode,
+    )
+
+    logger.info(
+        "Connecting with explicit ClientConfig: client_id=%s, project_id=%s, device_id=%s, mode=%s, endpoints=%s",
+        config.client_id,
+        config.project_id,
+        config.device_id,
+        config.mode,
+        list(config.endpoints),
+    )
+    return R2CClient.connect(config)
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,14 +71,46 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bundle",
         type=str,
-        required=True,
-        help="Path to the platform-issued credential bundle zip or unpacked directory",
+        default=None,
+        help="Path to the platform-issued credential bundle zip or unpacked directory (recommended)",
+    )
+    parser.add_argument(
+        "--project-id",
+        type=str,
+        default="r2c",
+        help="Project ID for explicit ClientConfig mode",
+    )
+    parser.add_argument(
+        "--device-id",
+        type=str,
+        default="local",
+        help="Device ID for explicit ClientConfig mode",
     )
     parser.add_argument(
         "--client-id",
         type=str,
         default=None,
-        help="Optional client_id override",
+        help="Optional client_id override; defaults to action-pub-01 in explicit mode",
+    )
+    parser.add_argument(
+        "--endpoints",
+        type=str,
+        default="",
+        help="Comma-separated endpoints for explicit ClientConfig mode, e.g. tcp/127.0.0.1:7447",
+    )
+    parser.add_argument(
+        "--endpoint-role",
+        type=str,
+        default="connect",
+        choices=["connect", "listen"],
+        help="Connection endpoint role for explicit ClientConfig mode",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="peer",
+        choices=["peer", "client"],
+        help="Connection mode for explicit ClientConfig mode",
     )
     parser.add_argument(
         "--hz",
@@ -82,11 +157,7 @@ def main() -> None:
     if args.hz <= 0:
         raise ValueError("--hz must be > 0")
 
-    logger.info("Connecting with platform credential bundle: %s", args.bundle)
-    if args.client_id:
-        logger.info("Using client_id override: %s", args.client_id)
-
-    client = R2CClient.connect(args.bundle, client_id=args.client_id)
+    client = build_client(args)
 
     try:
         logger.info("Connected. connection_info=%s", client.connection_info())

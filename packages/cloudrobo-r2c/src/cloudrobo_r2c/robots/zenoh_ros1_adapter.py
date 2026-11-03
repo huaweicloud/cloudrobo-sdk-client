@@ -64,7 +64,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 
-from cloudrobo_r2c.core.interfaces import IRobotHardwareAdapter
+from cloudrobo_r2c.core.interfaces import ICameraFrameSource, IRobotHardwareAdapter
 
 
 def create_zenoh_ros1_adapter(
@@ -284,7 +284,7 @@ def _encode_float32(value: float) -> bytes:
 
 
 @dataclass
-class ZenohRos1HardwareAdapter(IRobotHardwareAdapter):
+class ZenohRos1HardwareAdapter(IRobotHardwareAdapter, ICameraFrameSource):
     """Hardware adapter for ROS1 robots communicating via zenoh-bridge-ros1.
 
     Implements the :class:`IRobotHardwareAdapter` protocol so it can be
@@ -308,6 +308,7 @@ class ZenohRos1HardwareAdapter(IRobotHardwareAdapter):
     _connected: bool = field(default=False, init=False, repr=False)
     _buf: dict[str, deque] = field(default_factory=dict, init=False, repr=False)
     _msg_type_map: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _arrival_ts: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _pub_meta: dict[str, dict] = field(default_factory=dict, init=False, repr=False)
     _ctrl_params: dict[str, dict] = field(default_factory=dict, init=False, repr=False)
     _rate: float = field(default=30.0, init=False, repr=False)
@@ -425,6 +426,34 @@ class ZenohRos1HardwareAdapter(IRobotHardwareAdapter):
 
         return observation
 
+    # ── ICameraFrameSource（相机推流共享帧槽） ──────────────────────────────
+
+    def get_latest_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """返回指定相机（按 store_as 匹配）的最近一帧 BGR 图像。
+
+        无帧或非图像订阅时返回 None。``sensor_msgs/Image`` /
+        ``CompressedImage`` 均经 cv2 解码（``_compressed_image_to_ndarray``
+        输出 RGB，此处转回 BGR 以满足推流契约），内部加锁并返回副本。
+        """
+        dq = self._buf.get(camera_id)
+        if not dq:
+            return None
+        msg_type = self._msg_type_map.get(camera_id, "")
+        if msg_type not in ("sensor_msgs/CompressedImage", "sensor_msgs/Image"):
+            return None
+        rgb = _compressed_image_to_ndarray(dq[-1])
+        if rgb is None or cv2 is None:
+            return None
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR).copy()
+
+    def get_latest_timestamp(self, camera_id: str) -> float:
+        """返回最近一帧的采集时间戳（time.monotonic()），无帧返回 0.0。
+
+        ROS1 桥接消息未携带端侧单调时钟；以订阅到达时刻近似（deque 追加
+        时刻），供推流侧 stall 检测使用。
+        """
+        return self._arrival_ts.get(camera_id, 0.0)
+
     def send_action(self, command: Mapping[str, Any]) -> None:
         if not self._connected:
             raise RuntimeError("Adapter is not connected. Call connect() first.")
@@ -531,10 +560,15 @@ class ZenohRos1HardwareAdapter(IRobotHardwareAdapter):
             dq: deque = deque(maxlen=maxlen)
             self._buf[store_as] = dq
 
-            sub = self._session.declare_subscriber(
-                key,
-                lambda sample, _dq=dq: _dq.append(sample.payload.to_bytes()),
-            )
+            def _on_sample(sample: Any, _dq: deque = None, _store_as: str = store_as) -> None:
+                if _dq is None:
+                    _dq = self._buf.get(_store_as)
+                    if _dq is None:
+                        return
+                _dq.append(sample.payload.to_bytes())
+                self._arrival_ts[_store_as] = time.monotonic()
+
+            sub = self._session.declare_subscriber(key, _on_sample)
             self._subscribers.append(sub)
             logger.info("  Zenoh sub [%s] store_as=%s key=%s", name, store_as, key)
 

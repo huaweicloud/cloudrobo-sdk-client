@@ -7,7 +7,7 @@ Action with TCP position + quaternion + gripper values.
 
 Usage examples:
     python examples/flexiv_cloud_adapter.py
-    python examples/flexiv_cloud_adapter.py --project-id test-tenant --device-id flexiv-robot-01
+    python examples/flexiv_cloud_adapter.py
     python examples/flexiv_cloud_adapter.py --duration 30
 """
 
@@ -24,8 +24,8 @@ from _cloud_adapter_common import build_parser
 logger = logging.getLogger(__name__)
 
 ADAPTER_NAME = "FlexivCloudAdapter"
-DEFAULT_PROJECT_ID = "test-tenant"
-DEFAULT_DEVICE_ID = "flexiv-robot-01"
+DEFAULT_PROJECT_ID = "r2c"
+DEFAULT_DEVICE_ID = "local"
 DEFAULT_CLIENT_ID = "flexiv-cloud-adapter"
 
 # Flexiv joint names for action (8 DoF: TCP position 3 + TCP quaternion 4 + gripper 1)

@@ -1,0 +1,54 @@
+[build-system]
+# grpcio-tools 给兼容范围而非精确锁版本。运行时 protobuf 由官方
+# hw-r2c-sdk 锁定 7.35.0；protobuf cross-version 要求"运行时 ≥ 编译时"，
+# 因此构建工具生成的 gencode 必须 ≤ 7.35.0。版本映射（实测）：
+#   1.80.0→6.31.1  1.81.0→6.33.5  1.82.0→7.35.0  1.83.0/1.84.0→7.35.1(✗)
+# 故兼容范围为 >=1.80,<1.83（1.82.0 生成的 gencode 7.35.0 与运行时完全一致）。
+requires = ["setuptools", "grpcio-tools>=1.80,<1.83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "songyi-robot"
+version = "0.1.0"
+description = "SONGYI dual-arm (DucoCobot) R2C adapter package — out-of-tree example adapter"
+requires-python = ">=3.10"
+# 依赖 hw-r2c-sdk（同仓开发环境已 editable 安装；此处不声明，避免从索引拉取）。
+# 真机 vendor thrift 由 demo/ 新松 SDK 提供（懒加载）。
+# pyzmq 仅本包 teleimager 相机后端需要（teleimager_client.py 懒加载），
+# 不进官方 SDK 主依赖。
+dependencies = [
+    "pyzmq>=24.0",
+]
+
+# 本包独立于 SDK 安装树（examples/songyi/robot 即 songyi_robot 包根），
+# 以"三方适配器"模式经 entry-points 注册（与 examples/third_party_adapter 同模式）：
+#   安装：uv pip install -e examples/songyi/robot
+[tool.setuptools]
+package-dir = { "songyi_robot" = "." }
+packages = [
+    "songyi_robot",
+    "songyi_robot.models",
+    "songyi_robot.models.generated",
+    "songyi_robot.proto",
+]
+
+# 构建时自动编译 proto（产物 models/generated/*_pb2.py 不入库，安装时生成，
+# 与官方 SDK src/r2c_sdk/_build_commands.py 同模式）：
+[tool.setuptools.cmdclass]
+compile_protobuf = "songyi_robot._build_commands.CompileProtobufCommand"
+build_py = "songyi_robot._build_commands.BuildPyWithProtobuf"
+egg_info = "songyi_robot._build_commands.EggInfoWithProtobuf"
+build_editable = "songyi_robot._build_commands.BuildEditableWithProtobuf"
+
+[project.entry-points."r2c_sdk.adapters"]
+songyi = "songyi_robot.songyi_adapter:create_songyi_adapter"
+songyi_mock = "songyi_robot.songyi_adapter:create_songyi_mock_adapter"
+
+[project.entry-points."r2c_sdk.protos"]
+"songyi.waist_command" = "songyi_robot.models.generated.waist_command_pb2:WaistCommand"
+
+# proto/waist_command.proto 由构建命令（_build_commands.py）在安装/构建时自动
+# 编译到 models/generated/，无需手动重生成；proto 变更后重新安装即可：
+#   python -m grpc_tools.protoc -Iproto --python_out=models/generated proto/waist_command.proto
+#   （随后把生成文件内 `import waist_command_pb2 as` 形式改为包内相对引用——
+#     本 proto 无外部 proto 依赖，通常无需处理；构建命令已自动执行该修正）

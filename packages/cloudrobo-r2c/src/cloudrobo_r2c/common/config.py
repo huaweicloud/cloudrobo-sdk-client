@@ -28,6 +28,8 @@ DEFAULT_PUBLISHER_RELIABILITY_BY_MESSAGE = {
     "observations": "RELIABLE",
     "actions": "RELIABLE",
     "joint_states": "BEST_EFFORT",
+    "camera_capability": "RELIABLE",
+    "token_renew_request": "RELIABLE",
     "end_effector_states": "BEST_EFFORT",
     "localization_states": "BEST_EFFORT",
     "imu_states": "BEST_EFFORT",
@@ -45,6 +47,8 @@ DEFAULT_PUBLISHER_PRIORITY_BY_MESSAGE: Dict[str, str] = {
     "localization_states": "DATA",
     "imu_states": "DATA",
     "heartbeats": "BACKGROUND",
+    "camera_capability": "DATA",
+    "token_renew_request": "DATA",
 }
 
 SUBSCRIBER_HANDLER_CALLBACK = "callback"
@@ -70,6 +74,10 @@ SUPPORTED_MESSAGE_TYPES = frozenset(
         "localization_states",
         "imu_states",
         "heartbeats",
+        # --- 相机推流相关（LiveKit WebRTC 视频流） ---
+        "job_command",                # job/command 下发命令（CAMERA_START/STOP/RTC_TOKEN_RENEW）
+        "camera_capability",          # device/camera_capability 相机能力上报
+        "token_renew_request",        # device/token_renew_request JWT 续签请求
     }
 )
 
@@ -167,17 +175,18 @@ class ClientConfig:
     def from_yaml(
         cls,
         path: str,
-        project_id: Optional[str],
-        device_id: Optional[str],
-        client_id: Optional[str],
+        project_id: Optional[str] = None,
+        device_id: Optional[str] = None,
+        client_id: Optional[str] = None,
         *,
         endpoints: Optional[Sequence[str]] = None,
         mode: Optional[str] = None,
+        endpoint_role: Optional[str] = None,
     ) -> "ClientConfig":
         """Load full client configuration from a YAML file.
 
-        *endpoints* and *mode*, when provided, override the YAML values
-        so CLI flags take precedence over file defaults.
+        *endpoints*, *mode*, and *endpoint_role*, when provided, override
+        the YAML values so CLI flags take precedence over file defaults.
         """
         data = cls._load_yaml_mapping_file(path, display_name=path)
 
@@ -255,7 +264,10 @@ class ClientConfig:
             project_id=project_id if project_id else data.get("project_id"),
             device_id=device_id if device_id else data.get("device_id"),
             client_id=client_id if client_id else data.get("client_id"),
-            endpoint_role=data.get("endpoint_role", ENDPOINT_ROLE),
+            endpoint_role=(
+                endpoint_role if endpoint_role is not None
+                else data.get("endpoint_role", ENDPOINT_ROLE)
+            ),
             endpoints=tuple(endpoints),
             protocol=data.get("protocol", PROTOCOL_ZENOH),
             mode=mode if mode is not None else data.get("mode", "peer"),
@@ -453,7 +465,7 @@ class ClientConfig:
             encryption_algorithm=serialization.NoEncryption(),
         )
         return base64.b64encode(plain_pem_bytes).decode("ascii")
-    
+
     @staticmethod
     def _generate_default_client_id(device_id: str) -> str:
         device = str(device_id or "device").strip() or "device"
@@ -497,7 +509,7 @@ class ClientConfig:
 
     @classmethod
     def _resolve_default_perf_yaml_path(cls) -> Optional[str]:
-        """Resolve default_zenoh_perf.yaml from the installed package data."""
+        """Resolve ``default_zenoh_perf.yaml`` from the installed package data."""
         from cloudrobo_r2c.common.config_path import resolve_config_path
 
         return resolve_config_path(DEFAULT_PERF_CONFIG_FILENAME)
@@ -604,7 +616,9 @@ class ClientConfig:
         if value is None:
             return {}
         if not isinstance(value, ABCMapping):
-            raise ValueError("publisher/subscriber per-message options must be a mapping")
+            raise ValueError(
+                "publisher/subscriber per-message options must be a mapping"
+            )
         return {str(k): str(v) for k, v in value.items()}
 
     @staticmethod
@@ -631,9 +645,13 @@ class ClientConfig:
         if value is None:
             return ()
         if isinstance(value, (str, bytes)):
-            raise ValueError("predeclare_keyexpr_by_message must be a sequence of strings")
+            raise ValueError(
+                "predeclare_keyexpr_by_message must be a sequence of strings"
+            )
         if not isinstance(value, ABCSequence):
-            raise ValueError("predeclare_keyexpr_by_message must be a sequence of strings")
+            raise ValueError(
+                "predeclare_keyexpr_by_message must be a sequence of strings"
+            )
         return tuple(str(item) for item in value)
 
     @staticmethod

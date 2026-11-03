@@ -11,7 +11,7 @@
 #   4. RealSense 相机通过 USB 连接
 #
 # 用法:
-#   python -m r2c_sdk.cloudroboclient \
+#   python -m cloudrobo_r2c.cloudroboclient \
 #     --client-config config/client_config.yaml \
 #     --robot-config config/robot_ur5e_config.yaml
 # =============================================================================

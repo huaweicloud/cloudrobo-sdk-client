@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "CommandProto";
+option java_multiple_files = false;
+
+message Command {
+  int64 timestamp = 1;
+  // 指令类型，枚举值"TELEOP_ENTER", "TELEOP_EXIT"
+  string command_type = 2;
+  // 数据回流开关（0=正常回流，1=跳过回流；语义由接收方定义）
+  int32 skip_data_reflux = 3;
+}
+

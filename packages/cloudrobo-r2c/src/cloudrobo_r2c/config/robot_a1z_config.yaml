@@ -1,5 +1,5 @@
 # A1Z + G1Z 夹爪 机器人配置文件
-# 使用方式: python -m r2c_sdk.cloudroboclient --robot-config config/robot_a1z_config.yaml
+# 使用方式: python -m cloudrobo_r2c.cloudroboclient --robot-config config/robot_a1z_config.yaml
 
 schema_version: "v2.1"
 

@@ -58,27 +58,53 @@ runtime:
 
 hardware:
   # 当前激活的硬件适配器类型。支持: "lerobot", "ros2", "raw_sdk"
-  type: "lerobot" 
+  type: "lerobot"
+  # ── state/current 发布绑定（runtime.current_state 废止，会话级周期
+  #    上报一并移除；so101 改走 hardware.topics 绑定，collector 为
+  #    adapter.get_runtime）───────────────────────────────────────────
+  topics:
+    "{project_id}/{device_id}/state/current":
+      proto: "cloudrobo_r2c.common.models:RunTimeMessage"
+      direction: "publish"
+      rate_hz: 2                      # 状态发布频率（2Hz）
+      collector: "get_runtime"
   config:
+    # robot.connect() 调用参数。SO101 connect(calibrate=True) 默认会在已存在
+    # 标定文件时弹出交互式确认（input()），云端无人值守场景必须显式传 false
+    # （标定已提前完成：robots/so_follower/R12260406.json）。
+    runtime:
+      robot_connect:
+        calibrate: false
+
     robot:
+      # lerobot 0.5.1 的 SO101Follower.name == "so_follower"，RobotConfig
+      # 注册类型为 so101_follower；标定文件实际读取路径为
+      # {calibration_dir}/robots/so_follower/{id}.json
       type: so101_follower
-      id: so101_follower
+      # 当前 SO101 从臂的标定 robot_id（标定文件 R12260406.json 已存在）
+      id: R12260406
+      # null = 默认 HF 缓存目录 (~/.cache/huggingface/lerobot/calibration/robots/)
       calibration_dir: null
-      # Replace with the actual serial device used by your SO101 robot.
+      # 当前 SO101 从臂串口（udev 探测：vendor 55d3 serial 5B14111199 → ttyACM0；
+      # 若换臂请改为对应 ttyACMx）
       port: /dev/ttyACM0
       cameras:
+        # 前向/全局相机（udev 探测：1bcf:2281 serial JYU2C-2083-2603075 → /dev/video0）
         front:
           type: opencv
           index_or_path: /dev/video0
           width: 640
           height: 480
           fps: 30
+        # 腕部相机（udev 探测：1bcf:2281 serial JYU2C-2083-2603058 → /dev/video2）
         wrist:
           type: opencv
           index_or_path: /dev/video2
           width: 640
           height: 480
           fps: 30
+    # state/current 帧 location（可按需修改）
+    location: "0;上海世博展览馆"
 
     # 命令配置
     commands:
@@ -92,7 +118,7 @@ hardware:
           - wrist_roll.pos
           - gripper.pos
         joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        
+
 translator:
   type: "configurable"
 
@@ -109,13 +135,11 @@ device_to_r2c:
     - target_key: "images.color.front"
       source_path: "front"
       transforms: 
-        - rgb_to_bgr
         - ndarray_to_jpeg
 
     - target_key: "images.color.wrist"
       source_path: "wrist"
       transforms: 
-        - rgb_to_bgr
         - ndarray_to_jpeg
 
 r2c_to_device:
@@ -151,11 +175,34 @@ r2c_to_device:
       source_index: 5
       use_assign_dotted: false
       required: true
-    # ── 扩展字段 ──
-    - target: "camera.depth_frame"
-      source: "extensions.depth_image"
-      extension:
-        dtype: FLOAT32
-        shape: [480, 640, 1]
-      transforms:
-        - ndarray_to_bytes
+
+# ── 相机推流（LiveKit WebRTC，可选能力） ─────────────────────────────────
+# 相机设备由硬件适配器独占持有（LeRobot robot.cameras：front → /dev/video0，
+# wrist → /dev/video2），推流侧只读共享帧槽，不重复打开设备（避免 V4L2
+# 独占冲突）。云端下发 CAMERA_START 后经 LiveKit 推流；能力信息上报到
+# {project_id}/{device_id}/device/camera_capability。
+#
+# camera_device_map 的 value 是适配器帧槽 key（即 robot.cameras 的 cam_key，
+# 与 device_to_r2c 的 source_path 一致）；云端 camera_id 即这里的 key。
+camera_streaming:
+  enabled: true
+  camera_device_map:
+    front: "front"
+    wrist: "wrist"
+  # 全局默认推流参数（未在 camera_overrides 中指定的相机回退到此值）
+  default_width: 640
+  default_height: 480
+  default_fps: 20
+  # 每路相机独立推流配置（可选；覆盖 default_width/height/fps）
+  camera_overrides:
+    front:
+      width: 640
+      height: 480
+      fps: 20
+    wrist:
+      width: 640
+      height: 480
+      fps: 15
+  # 推流带宽/帧率上限
+  max_bitrate: 300000
+  max_framerate: 20

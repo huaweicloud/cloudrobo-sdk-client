@@ -101,6 +101,7 @@ class KeyboardController:
             return
         try:
             import termios
+
             termios.tcsetattr(self._tty_fd, termios.TCSADRAIN, self._tty_old_settings)
         except Exception:
             logger.debug("[KB] failed to restore terminal settings", exc_info=True)
@@ -165,7 +166,9 @@ class KeyboardController:
                     try:
                         msvcrt.getwch()
                     except Exception:
-                        logger.debug("[KB] failed to read extended key on Windows", exc_info=True)
+                        logger.debug(
+                            "[KB] failed to read extended key on Windows", exc_info=True
+                        )
                     continue
                 self._handle_char(ch)
             else:
@@ -211,7 +214,11 @@ class KeyboardController:
 
         # Check if this command requires the flow to be paused
         cmd_instance = getattr(adapter, "_adapter_commands", {}).get(cmd_name)
-        requires_pause = getattr(cmd_instance, "requires_pause", True) if cmd_instance is not None else False
+        requires_pause = (
+            getattr(cmd_instance, "requires_pause", True)
+            if cmd_instance is not None
+            else False
+        )
         if requires_pause and self._is_paused is not None and not self._is_paused():
             logger.info(
                 "[KB] %s → %s: requires pause — press space to pause first.",

@@ -1,36 +1,87 @@
 syntax = "proto3";
 
+// 数据回流上传大屏 —— 进度上报数据结构。
+//
+// 对应 examples/progress_dashboard/server.py 中 UploadMonitor.metrics() 上报的内容，
+// 是把原 taskprocess.proto 的 TaskProcess 语义对齐到【文件夹批量上传】场景后的独立版本，
+// 并新增了 Overview 概览汇总字段，供大屏展示前端对齐字段使用。
+//
+// 与 taskprocess.proto 的关系：
+//   - nodes[]: 原来表示“作业编排的任务节点”，这里表示“正在上传/排队/已完成的每个文件”
+//   - current_step: 原来表示“当前编排 step”，这里表示“当前正在进行的上传动作(action)”
+//   - 新增 UploadOverview: 整批上传的汇总指标（大屏顶部概览卡片数据来源）
+//
+// 时间字段统一使用【毫秒】(int64)，与 Go/Python 的时间戳习惯一致；
+// 大小统一使用【字节】；progress/percent 为 0~100 的浮点百分比。
+
 package r2c_sdk;
+
 option java_package = "com.huawei.cloudrobo.r2csdk.proto";
 option java_outer_classname = "DataUploadProgressProto";
 option java_multiple_files = false;
 
+// ============================================================================
+// 顶层上报消息
+// ============================================================================
 message DataUploadProgress {
+
   // 消息终端源: {project_id}/{device_id}
   string source = 1;
+
   // 会话开始时间（毫秒时间戳）
   int64 timestamp = 2;
-  // 所有文件的进度节点
+
+  // 所有文件的进度节点（每个待/正/已完成上传的文件对应一个）
   repeated UploadNode nodes = 3;
-  // 0=进行中, 1=全部成功
+
+  // 整批上传任务状态：
+  //   0=进行中(in_progress), 1=全部成功(finish)
   int32 task_state = 4;
+
   // OBS资产路径
   string asset_path = 5;
+
 }
 
+// ============================================================================
+// 单个文件的上传节点
+// ============================================================================
 message UploadNode {
+  // 文件 uuid
   string file_id = 1;
+
+  // 文件显示名称（basename，如 a.jpg）
   string task_name = 2;
-  // 0-视频/1-图像/2-点云/3-文本/4-其他
-  int32 data_type = 3;
+
+  // 数据类型（推断：0-视频/1-图像/2-点云/3-文本/4-其他）
+  int32 data_type = 3; // 枚举值
+
+  // 文件大小（字节）
   int64 size = 4;
-  int64 enqueue_time = 5;
+
+  // 入队时间（毫秒时间戳）
+  int64 enqueue_time = 5; // 待确认
+
+  // 开始上传时间（毫秒时间戳，未开始时为 0）
   int64 start_time = 6;
+
+  // 上传进度百分比（0~100 float）
   float progress = 8;
-  // 0=queued, 1=uploading, 2=done, 3=failed
+
+  // 状态码（int32）：
+  //   0=排队 queued, 1=上传中 uploading, 2=完成 done, 3=失败 failed
   int32 result_state = 9;
+
+  // 剩余时间估算（毫秒），无法估算时为 0
   int64 eta_ms = 10;
+
+  // 平均上传速率（字节/秒，滑动窗口）
   double avg_bps = 11;
+
+  // 任务类型（用于大屏顶部任务分布聚合，后端按此字段 GROUP BY 统计）
   string task_type = 12;
+
+  // 采集方式（用于大屏顶部采集方式分布聚合，后端按此字段 GROUP BY 统计）
   string collect_method = 13;
 }
+

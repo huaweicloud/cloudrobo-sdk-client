@@ -15,7 +15,7 @@ runtime:
   # 空格 = 一键暂停全流程（停动作+停观测+清空待执行action队列+可选回home），再按空格恢复
   keyboard_control:
     enabled: false
-    
+
 hardware:
   type: "q25_ros2"
   config:
@@ -37,28 +37,44 @@ translator:
   type: "configurable"
 
 device_to_r2c:
-  image_encoding: "jpeg"
+  task: pick the pen into the box
   mappings:
-    # Camera image -> images.color.image (fixed key name "image")
-    - target_key: "images.color.image"
+    # Camera image -> images.color.front
+    - target_key: "images.color.front"
       source_path: "front"
-      transforms:
-        - jpeg_to_ndarray
-        - rgb_to_bgr
-        - ndarray_to_jpeg
-    # end_effector_states: [call_method, id, task_id, reset_status]
-    - target_key: "end_effector_states.names"
-      default: ["call_method", "id", "task_id"]
-    - target_key: "end_effector_states.position"
-      source_paths: ["call_method", "call_id", "task_id"]
-    # joint_states -> empty dict (no odom data sent)
-    - target_key: "joint_states"
-      default: {}
-    # end_effector_pose -> empty dict
-    - target_key: "end_effector_pose"
-      default: {}
+      # 如果图像反色，则取消下列4行注释
+      # transforms:
+      #   - jpeg_to_ndarray
+      #   - rgb_to_bgr
+      #   - ndarray_to_jpeg
+
+    # ── 扩展字段 ───────────────────────────────────────────────
+
+    # 任务id
+    - target: "extensions.task_id"
+      source: "task_id"
+      extension:
+        dtype: INT32
+        shape: []
+
+    # 环境id
+    - target: "extensions.env_id"
+      source: "call_id"
+      extension:
+        dtype: STRING
+        shape: []
+
+    # 机器人世界坐标（2维）
+    - target: "extensions.robot_pos_world"
+      default: [1, 0]
+      extension:
+        dtype: FLOAT32
+        shape: [2]
 
 r2c_to_device:
-  # Empty mappings: translator passes through the full action dict.
-  # The adapter directly parses joint_states.position (32 floats = 8 waypoints x 4 dims).
-  mappings: []
+  mappings:
+    # 将云端动作映射为 adapter 可识别的命令
+    - target: "pos_action"
+      source: "extensions.vln_action"
+      use_assign_dotted: false
+      required: false

@@ -51,7 +51,7 @@ def _parse_pose_with_covariance(
 try:
     from ..generated import localization_state_pb2
 except Exception:
-    localization_state_pb2 = None
+    localization_state_pb2: Any = None  # type: ignore[no-redef]
 
 
 @dataclass

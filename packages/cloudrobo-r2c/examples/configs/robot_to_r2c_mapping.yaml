@@ -1,0 +1,478 @@
+r1:
+  ros_to_r2c:
+    observations.joint_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - left_arm_joint1
+        - left_arm_joint2
+        - left_arm_joint3
+        - left_arm_joint4
+        - left_arm_joint5
+        - left_arm_joint6
+        - right_arm_joint1
+        - right_arm_joint2
+        - right_arm_joint3
+        - right_arm_joint4
+        - right_arm_joint5
+        - right_arm_joint6
+    observations.end_effector_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - left_gripper_finger_joint1
+        - left_gripper_finger_joint2
+        - right_gripper_finger_joint1
+        - right_gripper_finger_joint2
+    observations.images.color.front:
+      sub_topic_name: "/camera_head_left/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist_left:
+      sub_topic_name: "/camera_left/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist_right:
+      sub_topic_name: "/camera_right/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+  r2c_to_ros:
+    actions.joint_states.position:
+      - pub_topic_name: "/left_arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - left_arm_joint1
+        - left_arm_joint2
+        - left_arm_joint3
+        - left_arm_joint4
+        - left_arm_joint5
+        - left_arm_joint6
+      - pub_topic_name: "/right_arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - right_arm_joint1
+        - right_arm_joint2
+        - right_arm_joint3
+        - right_arm_joint4
+        - right_arm_joint5
+        - right_arm_joint6
+    actions.end_effector_states.position:
+      - pub_topic_name: "/left_gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - left_gripper_finger_joint1
+        - left_gripper_finger_joint2
+      - pub_topic_name: "/right_gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - right_gripper_finger_joint1
+        - right_gripper_finger_joint2
+  robot_to_model_joint_names_mapping:
+    left_arm_joint1: left_arm_1
+    left_arm_joint2: left_arm_2
+    left_arm_joint3: left_arm_3
+    left_arm_joint4: left_arm_4
+    left_arm_joint5: left_arm_5
+    left_arm_joint6: left_arm_6
+    right_arm_joint1: right_arm_1
+    right_arm_joint2: right_arm_2
+    right_arm_joint3: right_arm_3
+    right_arm_joint4: right_arm_4
+    right_arm_joint5: right_arm_5
+    right_arm_joint6: right_arm_6
+  init_states:
+    left_arm_joint1: -0.279
+    left_arm_joint2: 1.867
+    left_arm_joint3: -0.454
+    left_arm_joint4: -2.304
+    left_arm_joint5: -1.431
+    left_arm_joint6: 1.693
+    right_arm_joint1: 0.279
+    right_arm_joint2: 1.867
+    right_arm_joint3: -0.454
+    right_arm_joint4: 2.304
+    right_arm_joint5: 1.431
+    right_arm_joint6: -1.693
+    torso_joint1: 0.153
+    torso_joint2: -0.108
+    torso_joint3: -0.504
+    torso_joint4: 0
+    left_gripper_finger_joint1: 0.04
+    left_gripper_finger_joint2: 0.04
+    right_gripper_finger_joint1: 0.04
+    right_gripper_finger_joint2: 0.04
+  init_state_error: 0.005
+qinglong:
+  ros_to_r2c:
+    observations.joint_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - J_arm_l_01
+        - J_arm_l_02
+        - J_arm_l_03
+        - J_arm_l_04
+        - J_arm_l_05
+        - J_arm_l_06
+        - J_arm_l_07
+        - J_arm_r_01
+        - J_arm_r_02
+        - J_arm_r_03
+        - J_arm_r_04
+        - J_arm_r_05
+        - J_arm_r_06
+        - J_arm_r_07
+    observations.end_effector_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - left_gripper_left_finger_joint
+        - left_gripper_right_finger_joint
+        - right_gripper_left_finger_joint
+        - right_gripper_right_finger_joint
+        - left_gripper_Left_1_Joint
+        - right_gripper_Left_1_Joint
+    observations.images.color.front:
+      sub_topic_name: "/camera_front/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist_left:
+      sub_topic_name: "/camera_left/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist_right:
+      sub_topic_name: "/camera_right/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+  r2c_to_ros:
+    actions.joint_states.position:
+      - pub_topic_name: "/left_arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - J_arm_l_01
+        - J_arm_l_02
+        - J_arm_l_03
+        - J_arm_l_04
+        - J_arm_l_05
+        - J_arm_l_06
+        - J_arm_l_07
+      - pub_topic_name: "/right_arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - J_arm_r_01
+        - J_arm_r_02
+        - J_arm_r_03
+        - J_arm_r_04
+        - J_arm_r_05
+        - J_arm_r_06
+        - J_arm_r_07
+    actions.end_effector_states.position:
+      - pub_topic_name: "/left_gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - left_gripper_left_finger_joint
+        - left_gripper_right_finger_joint
+      - pub_topic_name: "/left_gripper_position_controller/visual_commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - left_gripper_Left_1_Joint
+        - left_gripper_Left_2_Joint
+        - left_gripper_Left_in_Joint
+        - left_gripper_Left_up_Joint
+        - left_gripper_Right_1_Joint
+        - left_gripper_Right_2_Joint
+        - left_gripper_Right_in_Joint
+        - left_gripper_Right_up_Joint
+      - pub_topic_name: "/right_gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - right_gripper_left_finger_joint
+        - right_gripper_right_finger_joint
+      - pub_topic_name: "/right_gripper_position_controller/visual_commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - right_gripper_Left_1_Joint
+        - right_gripper_Left_2_Joint
+        - right_gripper_Left_in_Joint
+        - right_gripper_Left_up_Joint
+        - right_gripper_Right_1_Joint
+        - right_gripper_Right_2_Joint
+        - right_gripper_Right_in_Joint
+        - right_gripper_Right_up_Joint
+  robot_to_model_joint_names_mapping:
+    J_arm_l_01: left_arm_1
+    J_arm_l_02: left_arm_2
+    J_arm_l_03: left_arm_3
+    J_arm_l_04: left_arm_4
+    J_arm_l_05: left_arm_5
+    J_arm_l_06: left_arm_6
+    J_arm_l_07: left_arm_7
+    J_arm_r_01: right_arm_1
+    J_arm_r_02: right_arm_2
+    J_arm_r_03: right_arm_3
+    J_arm_r_04: right_arm_4
+    J_arm_r_05: right_arm_5
+    J_arm_r_06: right_arm_6
+    J_arm_r_07: right_arm_7
+  init_states:
+    J_arm_r_01: 0.196
+    J_arm_r_02: -0.969
+    J_arm_r_03: -2.004
+    J_arm_r_04: 1.695
+    J_arm_r_05: 0.626
+    J_arm_r_06: -0.045
+    J_arm_r_07: -0.426
+    J_arm_l_01: -0.196
+    J_arm_l_02: -0.969
+    J_arm_l_03: 2.004
+    J_arm_l_04: 1.695
+    J_arm_l_05: -0.626
+    J_arm_l_06: -0.045
+    J_arm_l_07: 0.428
+    left_gripper_left_finger_joint: 0.05
+    left_gripper_right_finger_joint: 0.05
+    right_gripper_left_finger_joint: 0.05
+    right_gripper_right_finger_joint: 0.05
+    left_gripper_Left_1_Joint: 0
+    right_gripper_Left_1_Joint: 0
+  init_state_error: 0.005
+moz1:
+  ros_to_r2c:
+    observations.joint_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - LeftArm-0
+        - LeftArm-1
+        - LeftArm-2
+        - LeftArm-3
+        - LeftArm-4
+        - LeftArm-5
+        - LeftArm-6
+        - RightArm-0
+        - RightArm-1
+        - RightArm-2
+        - RightArm-3
+        - RightArm-4
+        - RightArm-5
+        - RightArm-6
+    observations.end_effector_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - left_hand_narrow1_joint
+        - left_hand_narrow2_joint
+        - left_hand_narrow3_joint
+        - left_hand_narrow_loop_joint
+        - left_hand_wide1_joint
+        - left_hand_wide2_joint
+        - left_hand_wide3_joint
+        - left_hand_wide_loop_joint
+        - right_hand_narrow1_joint
+        - right_hand_narrow2_joint
+        - right_hand_narrow3_joint
+        - right_hand_narrow_loop_joint
+        - right_hand_wide1_joint
+        - right_hand_wide2_joint
+        - right_hand_wide3_joint
+        - right_hand_wide_loop_joint
+    observations.images.color.front:
+      sub_topic_name: "/camera_front/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist_left:
+      sub_topic_name: "/camera_left/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist_right:
+      sub_topic_name: "/camera_right/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+  r2c_to_ros:
+    actions.joint_states.position:
+      - pub_topic_name: "/left_arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - LeftArm-0
+        - LeftArm-1
+        - LeftArm-2
+        - LeftArm-3
+        - LeftArm-4
+        - LeftArm-5
+        - LeftArm-6
+      - pub_topic_name: "/right_arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - RightArm-0
+        - RightArm-1
+        - RightArm-2
+        - RightArm-3
+        - RightArm-4
+        - RightArm-5
+        - RightArm-6
+    actions.end_effector_states.position:
+      - pub_topic_name: "/left_gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - left_hand_narrow1_joint
+        - left_hand_narrow2_joint
+        - left_hand_narrow3_joint
+        - left_hand_narrow_loop_joint
+        - left_hand_wide1_joint
+        - left_hand_wide2_joint
+        - left_hand_wide3_joint
+        - left_hand_wide_loop_joint
+      - pub_topic_name: "/right_gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - right_hand_narrow1_joint
+        - right_hand_narrow2_joint
+        - right_hand_narrow3_joint
+        - right_hand_narrow_loop_joint
+        - right_hand_wide1_joint
+        - right_hand_wide2_joint
+        - right_hand_wide3_joint
+        - right_hand_wide_loop_joint
+  robot_to_model_joint_names_mapping:
+    LeftArm-0: left_arm_1
+    LeftArm-1: left_arm_2
+    LeftArm-2: left_arm_3
+    LeftArm-3: left_arm_4
+    LeftArm-4: left_arm_5
+    LeftArm-5: left_arm_6
+    LeftArm-6: left_arm_7
+    RightArm-0: right_arm_1
+    RightArm-1: right_arm_2
+    RightArm-2: right_arm_3
+    RightArm-3: right_arm_4
+    RightArm-4: right_arm_5
+    RightArm-5: right_arm_6
+    RightArm-6: right_arm_7
+  init_states:
+    LeftArm-0: 0.628
+    LeftArm-1: -0.506
+    LeftArm-2: 0.681
+    LeftArm-3: 1.047
+    LeftArm-4: -0.803
+    LeftArm-5: -0.244
+    LeftArm-6: -1.396
+    RightArm-0: -0.628
+    RightArm-1: -0.506
+    RightArm-2: -0.691
+    RightArm-3: -1.047
+    RightArm-4: 0.803
+    RightArm-5: -0.244
+    RightArm-6: 1.396
+    left_hand_narrow1_joint: -0.524
+    left_hand_narrow2_joint: 0.0
+    left_hand_narrow3_joint: 0.0
+    left_hand_narrow_loop_joint: -0.8
+    left_hand_wide1_joint: 0.524
+    left_hand_wide2_joint: 0.0
+    left_hand_wide3_joint: 0.0
+    left_hand_wide_loop_joint: 0.8
+    right_hand_narrow1_joint: -0.524
+    right_hand_narrow2_joint: 0.0
+    right_hand_narrow3_joint: 0.0
+    right_hand_narrow_loop_joint: -0.8
+    right_hand_wide1_joint: 0.524
+    right_hand_wide2_joint: 0.0
+    right_hand_wide3_joint: 0.0
+    right_hand_wide_loop_joint: 0.8
+  init_state_error: 0.005
+so101:
+  ros_to_r2c:
+    observations.joint_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - shoulder_pan
+        - shoulder_lift
+        - elbow_flex
+        - wrist_flex
+        - wrist_roll
+        - gripper
+    observations.images.color.front:
+      sub_topic_name: "/camera_front/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist:
+      sub_topic_name: "/camera_wrist/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+  r2c_to_ros:
+    actions.joint_states.position:
+      - pub_topic_name: "/arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - shoulder_pan
+        - shoulder_lift
+        - elbow_flex
+        - wrist_flex
+        - wrist_roll
+    actions.end_effector_states.position:
+      - pub_topic_name: "/hand_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - gripper
+  robot_to_model_joint_names_mapping:
+    shoulder_pan: joint_1
+    shoulder_lift: joint_2
+    elbow_flex: joint_3
+    wrist_flex: joint_4
+    wrist_roll: joint_5
+    gripper: joint_6
+  init_states:
+    shoulder_pan: 0
+    shoulder_lift: -0.505
+    elbow_flex: 0.087
+    wrist_flex: 1.361
+    wrist_roll: -1.57
+  init_state_error: 0.005
+jaka_minicobo:
+  ros_to_r2c:
+    observations.joint_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - joint_1
+        - joint_2
+        - joint_3
+        - joint_4
+        - joint_5
+        - joint_6
+    observations.end_effector_states.position:
+      sub_topic_name: "/joint_states"
+      msg_type: sensor_msgs.msg.JointState
+      joint_names:
+        - left_finger_joint
+        - right_finger_joint
+    observations.images.color.front:
+      sub_topic_name: "/camera_external/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+    observations.images.color.wrist:
+      sub_topic_name: "/camera_wrist/camera_image_color"
+      msg_type: sensor_msgs.msg.Image
+  r2c_to_ros:
+    actions.joint_states.position:
+      - pub_topic_name: "/arm_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - joint_1
+        - joint_2
+        - joint_3
+        - joint_4
+        - joint_5
+        - joint_6
+    actions.end_effector_states.position:
+      - pub_topic_name: "/gripper_position_controller/commands"
+        msg_type: std_msgs.msg.Float64MultiArray
+        joint_names:
+        - left_finger_joint
+        - right_finger_joint
+  robot_to_model_joint_names_mapping:
+    joint_1: arm_1
+    joint_2: arm_2
+    joint_3: arm_3
+    joint_4: arm_4
+    joint_5: arm_5
+    joint_6: arm_6
+  init_states:
+    joint_1: 0.0
+    joint_2: -0.35
+    joint_3: -0.35
+    joint_4: 0.0
+    joint_5: -1.5
+    joint_6: 0.0
+    left_finger_joint: 0.0
+    right_finger_joint: 0.0
+  init_state_error: 0.005

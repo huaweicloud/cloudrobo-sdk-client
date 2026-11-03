@@ -4,8 +4,7 @@
 生成的动作轨迹 chunk_size 固定为 50（即 50 个轨迹步）。
 
 用法示例：
-    python examples/dummy_cloud_adapter.py --client-config config/client_config.yaml
-    python examples/dummy_cloud_adapter.py --bundle /path/to/bundle.zip --target-device-id robot-01
+    python examples/dummy_cloud_adapter.py
 """
 
 from __future__ import annotations
@@ -53,8 +52,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default="config/client_config.yaml",
         help="Path to the R2C client config YAML.",
     )
-    parser.add_argument("--project-id", type=str, default=None, help="Project ID")
-    parser.add_argument("--device-id", type=str, default=None, help="Device ID")
+    parser.add_argument("--project-id", type=str, default="r2c", help="Project ID")
+    parser.add_argument("--device-id", type=str, default="local", help="Device ID")
     parser.add_argument("--client-id", type=str, default=None, help="Client ID")
     parser.add_argument(
         "--endpoints",
@@ -84,7 +83,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--target-device-id",
         type=str,
-        default=None,
+        default="local",
         help="Target robot device ID for subscribing observations. Default: --device-id",
     )
     parser.add_argument(
@@ -126,6 +125,7 @@ def build_session(args: argparse.Namespace):
             client_id=args.client_id or "dummy-cloud-adapter",
             endpoints=parse_endpoints(args.endpoints) or None,
             mode=args.mode,
+            endpoint_role=args.endpoint_role,
         )
         return R2CClient.connect(client_config)
 
@@ -140,6 +140,7 @@ def build_session(args: argparse.Namespace):
         client_id=args.client_id or "dummy-cloud-adapter",
         endpoints=parse_endpoints(args.endpoints),
         mode=args.mode,
+        endpoint_role=args.endpoint_role,
     )
     config.validate()
     return R2CClient.connect(config)

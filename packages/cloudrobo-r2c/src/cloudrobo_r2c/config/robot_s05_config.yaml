@@ -1,0 +1,84 @@
+schema_version: "v2.1"
+
+# =============================================================================
+# 运行时配置
+# =============================================================================
+runtime:
+  publish_hz: 10.0
+  max_duration_s: 0.0
+  dry_run: false
+  action_response_timeout_s: 5.0
+  max_enqueue_actions_per_chunk: -1
+  enable_action_chunk_alignment: false
+
+  heartbeat:
+    enabled: true
+    interval_ms: 1000
+    status: "ONLINE"
+    mode: "AUTO"
+
+# =============================================================================
+# 硬件适配器配置
+# =============================================================================
+hardware:
+  type: "s05"
+  config:
+    dry_run: false                         # 连接真实硬件
+    s05_config:
+      robot_ip: "192.168.0.10"
+      robot_port: 10003
+      gripper_slave_id: 3
+    sdk_paths:
+      cps_sdk: "doc/hardware/CPS.py"
+      gripper_control: "doc/hardware/gripper_control.py"
+    cameras:
+      width: 640
+      height: 480
+      fps: 30
+
+translator:
+  type: "configurable"
+
+# =============================================================================
+# 上行映射: 设备原始数据 → R2C Observations
+# =============================================================================
+device_to_r2c:
+  task: "s05 general task"
+  image_encoding: jpeg
+
+  mappings:
+    - target_key: "joint_states.names"
+      default: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]
+
+    - target_key: "end_effector_states.names"
+      default: ["gripper_1"]
+
+    - target_key: "joint_states.position"
+      source_path: "joint_positions"
+      transforms:
+        - array_to_list
+
+    - target_key: "end_effector_states.position"
+      source_path: "gripper_position"
+      transforms:
+        - array_to_list
+
+    - target_key: "images.color.wrist"
+      source_path: "camera_image"
+      transforms:
+        - ndarray_to_jpeg
+
+# =============================================================================
+# 下行映射: R2C Actions → 设备指令
+# =============================================================================
+r2c_to_device:
+  mappings:
+    - target: "arm_action"
+      source: "joint_states.position"
+      transforms:
+        - array_to_list
+
+    - target: "gripper_action"
+      source: "end_effector_states.position"
+      transforms:
+        - array_to_list

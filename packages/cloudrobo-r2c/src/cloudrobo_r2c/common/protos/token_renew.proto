@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "TokenRenewProto";
+option java_multiple_files = false;
+
+// ============================================================================
+// Topic: {project_id}/{robot_id}/device/token_renew_request
+// Direction: edge -> cloud (SDK -> Zenoh -> r2c-gateway -> pilot-datacollector)
+// Payload: TokenRenewRequest message
+//
+// The edge SDK sets a local timer (at expires_in - renewal_before seconds
+// after JWT issuance) to proactively request JWT renewal via this topic.
+//
+// pilot-datacollector subscribes to this topic, then:
+//   1. Verifies old_jti is not in Redis blacklist and not expired
+//   2. Adds old_jti to Redis blacklist (jwt:blacklist:{jti})
+//   3. Skips SETNX check (stream:active:{url} key already exists)
+//   4. Signs a new JWT (RS256)
+//   5. Refreshes stream:active:{url} TTL to new expires_in
+//   6. Publishes RTC_TOKEN_RENEW command with new JWT via job/command topic
+//
+// The SDK's local streaming state is 100% accurate: if the SDK crashes,
+// the timer never fires and no renewal request is sent.
+// ============================================================================
+
+message TokenRenewRequest {
+  // _ensure_state_source "{project_id}/{device_id}"
+  string source = 1;
+  // jti (JWT ID) of the current JWT being used for streaming.
+  // pilot-datacollector verifies this is valid and not already blacklisted.
+  string old_jti = 2;
+
+  // Camera ID associated with the current streaming session.
+  // Used by pilot-datacollector to correlate the renewal with the active stream.
+  string camera_id = 3;
+}

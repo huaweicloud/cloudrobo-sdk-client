@@ -6,20 +6,20 @@
 #
 # 用法:
 #   1. 先录制:
-#      python -m r2c_sdk.cloudroboclient \
+#      python -m cloudrobo_r2c.cloudroboclient \
 #        --robot-config config/robot_ur5e_config.yaml \
 #        --record recordings/ur5e_demo.r2cr
 #
 #   2. 再回放:
-#      python -m r2c_sdk.cloudroboclient \
+#      python -m cloudrobo_r2c.cloudroboclient \
 #        --robot-config config/robot_playback_config.yaml
 #
 # 联调 (配合 policy server):
-#   终端 1: python -m r2c_sdk.inference.r2c_lerobot_policy_server \
+#   终端 1: python -m cloudrobo_r2c.inference.r2c_lerobot_policy_server \
 #             --client-config config/client_config.yaml \
 #             --cloud-config config/cloud_ur5e_act.yaml \
 #             --policy-type act --device cpu
-#   终端 2: python -m r2c_sdk.cloudroboclient \
+#   终端 2: python -m cloudrobo_r2c.cloudroboclient \
 #             --client-config config/client_config.yaml \
 #             --robot-config config/robot_playback_config.yaml
 # =============================================================================

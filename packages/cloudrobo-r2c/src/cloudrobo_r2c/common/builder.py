@@ -5,9 +5,16 @@ from __future__ import annotations
 import time
 from typing import List, Sequence
 
-from cloudrobo_r2c.common.models import (EndEffectorPoses, EndEffectorStates,
-                                   ImageGroups, JointStates, Localization,
-                                   Observations, PointCloud, Pose7D)
+from cloudrobo_r2c.common.models import (
+    EndEffectorPoses,
+    EndEffectorStates,
+    ImageGroups,
+    JointStates,
+    Localization,
+    Observations,
+    PointCloud,
+    Pose7D,
+)
 
 
 class ObservationBuilder:
@@ -33,18 +40,20 @@ class ObservationBuilder:
         self._task = task
         return self
 
-    def add_image(self, name: str, data: bytes, is_depth: bool = False) -> ObservationBuilder:
+    def add_image(
+        self, name: str, data: bytes, is_depth: bool = False
+    ) -> ObservationBuilder:
         """添加图像数据。"""
         target = self._images.depth if is_depth else self._images.color
         target[name] = data
         return self
 
     def set_joint_states(
-        self, 
-        names: Sequence[str], 
-        positions: Sequence[float], 
-        velocities: Sequence[float] | None = None, 
-        torques: Sequence[float] | None = None
+        self,
+        names: Sequence[str],
+        positions: Sequence[float],
+        velocities: Sequence[float] | None = None,
+        torques: Sequence[float] | None = None,
     ) -> ObservationBuilder:
         """设置关节状态。"""
         if len(names) != len(positions):
@@ -62,11 +71,13 @@ class ObservationBuilder:
             self._joint_states.torque = list(torques)
         return self
 
-    def add_end_effector_pose(self, name: str, pose_7d: Sequence[float]) -> ObservationBuilder:
+    def add_end_effector_pose(
+        self, name: str, pose_7d: Sequence[float]
+    ) -> ObservationBuilder:
         """添加末端位姿 [x, y, z, qx, qy, qz, qw]。"""
         if len(pose_7d) != 7:
             raise ValueError(f"Pose must have 7 elements, got {len(pose_7d)}")
-        
+
         self._ee_poses.names.append(name)
         self._ee_poses.pose.append(Pose7D(list(pose_7d)))
         return self
@@ -80,19 +91,23 @@ class ObservationBuilder:
         return self
 
     def set_localization(
-        self, 
-        odom_pose_7d: Sequence[float] | None = None, 
-        map_pose_7d: Sequence[float] | None = None
+        self,
+        odom_pose_7d: Sequence[float] | None = None,
+        map_pose_7d: Sequence[float] | None = None,
     ) -> ObservationBuilder:
         if odom_pose_7d and len(odom_pose_7d) != 7:
-            raise ValueError(f"odom_pose_7d must have 7 elements, got {len(odom_pose_7d)}")
-            
+            raise ValueError(
+                f"odom_pose_7d must have 7 elements, got {len(odom_pose_7d)}"
+            )
+
         if map_pose_7d and len(map_pose_7d) != 7:
-            raise ValueError(f"map_pose_7d must have 7 elements, got {len(map_pose_7d)}")
+            raise ValueError(
+                f"map_pose_7d must have 7 elements, got {len(map_pose_7d)}"
+            )
 
         if odom_pose_7d:
             self._localization.odom_pose = list(odom_pose_7d)
-        
+
         if map_pose_7d:
             self._localization.map_pose = list(map_pose_7d)
         return self

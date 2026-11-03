@@ -1,0 +1,360 @@
+# 新松双臂主链路配置（Program A 的 main session，cloudroboclient 流程）
+# observation/action 全走 0.1.79 现有机制；本文件只新增 hardware 与映射。
+#
+# 安全提示：
+# - dry_run: true 时不执行推理 action，仅发观测。首次联调务必保持 true。
+# - max_step_rad: 单步关节目标与当前实际位置的 最大夹角（弧度），防止跳点。
+# - 真机测试必须有人值守急停。
+
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 30.0
+  max_duration_s: 0.0
+  dry_run: false                    # 首次联调保持 true，验证后再改 false
+  # 心跳自动发布（主 session {pid}/{did}/state/heartbeats）：2Hz
+  heartbeat: { enabled: true, interval_ms: 600, jitter_ms: 50,
+               status: ONLINE, mode: AUTO }
+  action_response_timeout_s: 3.0  # action 超时重发 observation
+  action_response_timeout_initial_s: 3.0
+  action_response_timeout_backoff: 3.0
+  max_enqueue_actions_per_chunk: 30
+  enable_action_chunk_alignment: false
+  skip_initial_observations: 1
+
+  # ── 模式控制（sync_client 公共能力 ModeControl）────────────────
+  # 遥操/协助进出 + 心跳 mode（AUTO/CONTROLLED/ASSISTED）联动的单点
+  # 决策；回调名解析到 hardware adapter 方法（进出的具体动作）。
+  mode_control:
+    teleop_enter_cb: "teleop_enter"
+    teleop_exit_cb: "teleop_exit"
+    assist_enter_cb: "assist_enter"
+    assist_exit_cb: "assist_exit"
+
+  async_request:
+    enabled: false
+    # action 剩余量 <= threshold 时发布新 observation（按需触发，非定频）
+    publish_trigger_threshold: 15
+    fusion:
+      strategy: replace
+      # 融合窗口大小 (用于 weighted_average / nearest_neighbor)
+      window_size: 5
+      # 类型感知融合 (Type-Aware Fusion)：仅声明前 7 维（左臂）——
+      # nearest_neighbor 匹配距离只计算左臂 7 关节，右臂不参与
+      state_types:  # 示例 (按实际 DOF 修改):
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+        - joint_angle
+
+  keyboard_control:
+    # true 时启动 stdin 键盘监听（仅终端聚焦时响应）：
+    #   a/d → 腰部末关节点动 +step/-step（jog_max_rad/jog_min_rad 限位）
+    #   s   → 腰部末关节回 0
+    #   l   → 左臂位姿四步循环（位姿1→home→位姿2→home，每按一步）
+    #   r   → 右臂位姿四步循环（同上，home=reset_pose 对应臂段）
+    #   h   → 双臂复位到 reset_pose + 夹爪张开
+    #   空格 → 暂停/恢复
+    #   q   → 优雅退出
+    enabled: true
+    keymap:
+      a: "waist_increase"
+      d: "waist_decrease"
+      s: "waist_reset"
+      l: "left_toggle"
+      r: "right_toggle"
+      g: "toggle_gripper"   # 切换夹爪开合（开 ↔ 合交替）
+
+hardware:
+  type: "custom"
+  class_path: "songyi_robot.songyi_adapter.SongyiHardwareAdapter"
+  # ── 自定义 topic 四绑定（全部走主 session）─────────────────────
+  # collector/on_message 名解析到 hardware adapter 的方法；proto 每绑定
+  # 显式声明（module:ClassName wrapper 或 pb2 直引用）
+  topics:
+    "{project_id}/{device_id}/state/current":
+      proto: "cloudrobo_r2c.common.models:RunTimeMessage"   # wrapper 类（与 pb2 直引用等价）
+      direction: "publish"
+      rate_hz: 2                    # 状态发布频率（真机默认 30，现场联调降频）
+      collector: "get_runtime"       # adapter.get_runtime → songyi_app.get_runtime
+    # 腰部控制：command_waist 为唯一控制入口（云端不允许控制腰部，仅本地
+    # 通道联调；position=[j4] 弧度，可控段；前 3 关节写死不可控）
+    "{project_id}/{device_id}/waist_command":
+      proto: "songyi.waist_command"    # r2c_sdk.protos 注册名（siasun 专属 proto）
+      direction: "subscribe"
+      on_message: "on_waist_command"
+    # 告警不走绑定：AlarmManager 检测线程经 EventManager 单例
+    #   推送，topic 固定 {project_id}/{device_id}/event（三绑定）
+  custom_config:
+    # ── 双臂 Thrift 连接（新松 SDK 3.8.5：demo/ 目录）──────────────
+    devices:
+      sdk_path: "demo"             # 含 DucoCobot/Waist/Head.py + gen_py + lib
+      # 状态统一读取节流（秒）：位置/速度/加速度/扭矩/温度/电流/TCP 位姿
+      # 全部由单条 get_robot_status RPC 提供并按该窗口节流——此前各组
+      # 独立 getter 高频请求会打满控制器导致报错。调大可进一步降频
+      status_min_interval_s: 0.02
+      # 地理位置（runtime 帧 location 第二段；第一段为腰部推算的当前朝向，
+      # 如 "270;上海世博展览馆"）
+      location: "上海世博展览馆"
+      # gripper_hand_id: 夹爪 Modbus 从站地址（工具 485 总线），不配则不控制夹爪
+      # tool/wobj: servoj_pose 的工具/工件坐标系（缺省 tcp_1 + 按臂
+      # arm_1_base/arm_2_base）
+      # 末端速度（m/s，movel/servol 笛卡尔通道；独立于关节速度 velocity，
+      # 可按臂覆盖）
+      tcp_velocity: 0.1
+      # 末端动作 IK 试解门控：true 时末端 action 先 cal_ikine 检测
+      # 解是否存在，无解则跳过该侧 servol（多一次 RPC）；默认 false
+      ik_check: true
+      # 末端移动 q_near：'home' = 对应臂 home 位姿（reset_pose 臂段，
+      # 弧度）；也可给 7 关节弧度列表；删除该项则按末端移动默认行为
+      # （vendor 参数为空）。顶层为两侧缺省，左右可分别设置（臂级优先）：
+      #   q_near: "home"                                  # 两侧均用各自 home
+      #   left:  { ..., q_near: [0.0, -0.5, 1.0, 0.0, 0.0, 0.0, 0.0] }
+      #   right: { ..., q_near: "home" }                  # 仅右臂用 home
+      #   right: { ..., q_near: [0.2, 0.3, 0.4, 0.0, 0.0, 0.0, 0.0] }
+      # q_near: "home"  # 不使用参考位姿
+      # 现场标定 q_near（左/右臂分别设置；如需启用取消注释）
+      # left: { ip: "192.168.1.234", port: 7003, socket_timeout_ms: 100, gripper_hand_id: 1 , velocity: 0.8,
+      #         tool: "tcp_1", wobj: "arm_1_base",
+      #         q_near: [-2.1495385159243763, -1.0501536600065857, 1.5707843425699912,
+      #                  2.282539443924023, -0.937418056321897, -1.024147891961962,
+      #                  -0.5021270393095345] }
+      # right: { ip: "192.168.1.234", port: 7004, socket_timeout_ms: 100, gripper_hand_id: 1 , velocity: 0.8,
+      #          tool: "tcp_1", wobj: "arm_2_base",
+      #          q_near: [2.1012301053308837, -1.1119443236186042, -1.5707963267948966,
+      #                   2.363864394131773, 0.8436774491121972, -1.0509925557499606,
+      #                   0.517658594786877] }
+      left: { ip: "192.168.1.234", port: 7003, socket_timeout_ms: 100, gripper_hand_id: 1 , velocity: 0.8,
+              tool: "tcp_1", wobj: "arm_1_base" }
+      right: { ip: "192.168.1.234", port: 7004, socket_timeout_ms: 100, gripper_hand_id: 1 , velocity: 0.8,
+               tool: "tcp_1", wobj: "arm_2_base" }
+
+    # ── 腰部/头部（可选使能，默认关闭）───────────────────────────
+    # enabled: true 后 SDK 只连接、不下发上电/使能指令——必须由外部
+    # （示教器）上电并使能；未就绪时程序打印提示并循环等待（含连接
+    # 失败重试：模块未上电时 Thrift 连不上）。就绪后才继续启动。
+    # 腰部前 3 关节固定（fixed_joints，现场标定值；可配置覆盖，缺省回退
+    # 代码常量），enforce_fixed_pose 就绪后自动锁定（默认 true）——仅第
+    # 4 关节可控：
+    #   上传: joint_states.position 最后一维（15 维 = 双臂14 + 腰1），
+    #         observation 与 current_state 一致；未使能时为 0.0
+    #   控制: {project_id}/{device_id}/waist_command topic（WaistCommand，
+    #         position=[j4] 弧度）——收到该 topic 才控制腰部，
+    #         action/extensions 不再携带腰部（通道已删除）
+    # 朝向标定（runtime location 第一段 = offset + (invert ? -deg(j4) : deg(j4))，
+    # 归一化 [0,360)；j4=0 时朝向即 offset 基值，现场标定调整）：
+    #   orientation_invert: true 反向（腰转向与大地朝向相反时）
+    #   orientation_offset_deg: 腰 j4=0 时的朝向基值（原静态 location 首段）
+    # 键盘点动（a/d/s，弧度）：步长 jog_step_rad，限位 jog_max_rad/jog_min_rad
+    waist: { enabled: true, ip: "192.168.1.234", port: 7020,
+             velocity: 0.5, acceleration: 5.0, poll_interval_s: 2.0,
+             enforce_fixed_pose: true,
+             fixed_joints: [-0.8419940400200225, 1.561184229406744, -0.7249411193131796],
+             orientation_invert: true, orientation_offset_deg: 180.0,
+             jog_step_rad: 0.05, jog_max_rad: 1.5708, jog_min_rad: -1.5708 }
+    # 头部：全关节固定（fixed_joints，弧度，无可控关节）——初始化成功
+    # （连接 + 外部使能就绪）后无论偏差一律 movej 一次到位（先读实际
+    # 关节再发送）；之后无任何下发通道
+    head:  { enabled: false, ip: "192.168.1.234", port: 7021,
+             velocity: 0.3, acceleration: 5.0, poll_interval_s: 2.0,
+             enforce_fixed_pose: true,
+             fixed_joints: [-0.06829435266534412, 0.2678991086046236] }
+
+    # ── 相机（backend: "teleimager" 当前启用 / "cv2" 备选）─────────
+    # teleimager 后端：zmq 连 camera_client（teleimager/demo 同款接口）
+    # start_process: false 只连已运行实例；true 由 SDK 拉起 camera_client.bin
+    cameras:
+      backend: "teleimager"
+      host: "127.0.0.1"
+      request_port: 60000            # camera_client 请求端口
+      interface_port: 60008          # zmq REQ 连接端口
+      start_process: true           # 由 SDK 拉起 camera_client
+      timeout_ms: 3000               # REQ 收发超时；服务不在时报错降级而非永久阻塞(Ctrl+C 可停)
+      jpeg_quality: 95
+      camera_interface_bin: "./camera_client.bin"   # start_process: true 时使用
+      # ── cv2 备选（backend: "cv2" 时生效，OpenCV /dev/video* 直读）──
+      # head:        { path: "/dev/video31", width: 848, height: 480, fps: 30 }
+      # wrist_left:  { path: "/dev/video34", width: 848, height: 480, fps: 30 }
+      # wrist_right: { path: "/dev/video37", width: 848, height: 480, fps: 30 }
+    task: "songyi dual-arm task"
+
+    # ── 夹爪初始化（连接后执行 Reg 256，阻塞约 3s/只）─────────────
+    gripper_init_on_connect: true
+    gripper_full_calibration: false   # true = 全程标定（Reg=165），首次安装用
+
+    # ── 硬件层 dry_run ─────────────────────────────────────────
+    # true: send_action 只打印 [DRY_RUN] observation/action，不下发硬件。
+    # 与 runtime.dry_run（sync_client 层拦截）独立，双保险；真机执行前两者都要为 false。
+    dry_run: false
+
+    # ── 执行安全 ────────────────────────────────────────────────
+    max_step_rad: 3.14             # 单步关节目标与当前实际位置的 最大夹角（弧度）
+                                   # （action 指令保活机制已取消，此值放宽到 π）
+    state_max_age_ms: 30           # 状态缓存新鲜度阈值
+    # 复位最大速度（弧度/s，按 H 复位 movej 用；不配则用各臂 velocity）
+    reset_velocity: 0.2
+
+    # ── 告警上报（状态转移经 EventManager 推送，topic 固定
+    #   {project_id}/{device_id}/event，经主 session 直发上云）────
+    # 空闲：距最后一次 action 超过 threshold_s 上报 Minor 告警，恢复后上报解除
+    # 硬件状态：定时检测左右臂/腰/头 get_robot_state（非 SR_Enable=6 异常）
+    #   与 get_robot_status().servo_errid（任一关节非 0 异常）；按映射表上报，
+    #   缺映射走 internal_error 模板；同一异常不重复上报，恢复按解除配置上报
+    alarms:
+      state_file: "config/songyi_alarm_state.json"  # 激活告警持久化（重启读取，故障消除复用原 id 上报解除）
+      idle:
+        enabled: false
+        threshold_s: 60            # 空闲阈值（秒）
+        # severity/abstract/content 及 clear_* 可覆盖缺省文案
+      status:
+        enabled: true              # 硬件状态告警上传开关
+        clear_enabled: true        # 解除告警上传开关
+        check_interval_s: 2.0      # 硬件状态轮询周期（秒）
+        internal_error:            # 缺映射时的"内部错误"模板（可自定义）
+          severity: Minor
+          abstract: "内部错误"
+          content: "内部错误"
+          clear_severity: Info
+          clear_abstract: "内部错误解除"
+          clear_content: "内部错误解除"
+        # errid：0x700B 32 位位图已内置故障码表（伺服软件接口说明书 v04
+        # 第 8 章，告警 Major/解除 Info），可按 bit 十进制键覆盖文案：
+        # errid_mappings:
+        #   "65536": { severity: Major, abstract: "电机过载", content: "...",
+        #              clear_severity: Info, clear_abstract: "电机过载解除", clear_content: "..." }
+        errid_mappings: {}
+
+    # ── 回放（可替换真机作为 runtime/observation 数据源）──────────
+    # 配置后不连接机器人 SDK，状态按录制文件时间轴推进（帧率取 info.image.fps）
+    # record_observation:
+    #   path: "docs/data.json"      # 录制文件（格式见 docs/data.json）
+    #   loop: true                  # 播完循环；false 则停在最后一帧
+    #   fps: 30                     # 可选，覆盖文件内 fps
+
+    # ── runtime 发布字段级降采样（position 永远全速）──────────────
+    granularity: { velocity: 1, torque: 1, acceleration: 1, temperature: 1, current: 1 }
+
+    # ── 遥操 ───────────────────────────────────────────────────
+    # reset_pose: 双臂复位关节位（left 7 + right 7；配置后 teleop 复位与
+    # 键盘 go_home 复位可用）
+    reset_pose:
+    - -1.0320814488493082 # left
+    - -1.518377327058867
+    - 1.5707963267948966
+    - 2.328474977986255
+    - -0.36408075262473183
+    - 0.1747299991200988
+    - 0.1772946232498458
+    - 1.0320814488493082 #right
+    - -1.518377327058867
+    - -1.5707963267948966
+    - 2.328474977986255
+    - 0.36408075262473183
+    - 0.1747299991200988
+    - -0.1772946232498458
+    teleop:
+      enter_cmd: "echo enter VR mode"
+      enter_timeout_s: 10
+      reset_on: { enter: false, exit: false }   # enter/exit 是否先复位再后续操作
+
+# ── 相机推流（LiveKit WebRTC，可选能力）─────────────────────────────
+# 依赖硬件适配器实现 ICameraFrameSource（共享帧槽，本适配器已实现）：
+# 后台采集线程持续写帧槽，推理 get_observation 与推流 CameraCapture 共用，
+# 避免设备独占冲突。云端 camera_id → 帧槽 key（cameras 配置 name 同名）。
+# CAMERA_START/STOP 由云端命令触发；未配置本段则推流服务不启动。
+camera_streaming:
+  enabled: true
+  camera_device_map:
+    head: "head"
+    wrist_left: "wrist_left"
+    wrist_right: "wrist_right"
+  default_width: 640
+  default_height: 480
+  default_fps: 20
+  max_bitrate: 300000
+  max_framerate: 20
+
+translator:
+  type: "configurable"
+
+# ── 上行: adapter.get_observation() → R2C Observations ────────────────
+# joint_states.position 15 维：双臂 14（左7+右7）+ 腰部可控关节（末位；
+# 未使能 0.0）
+device_to_r2c:
+  task: "songyi dual-arm task"
+  image_encoding: jpeg
+  mappings:
+    - target_key: "joint_states.names"
+      source_path: "joint_states.names"
+    - target_key: "joint_states.position"
+      source_path: "joint_states.position"
+    - target_key: "joint_states.velocity"
+      source_path: "joint_states.velocity"
+      required: false
+    - target_key: "joint_states.torque"
+      source_path: "joint_states.torque"
+      required: false
+    - target_key: "end_effector_states.names"
+      source_path: "end_effector_states.names"
+      required: false
+    - target_key: "end_effector_states.position"
+      source_path: "end_effector_states.position"
+      required: false
+    - target_key: "end_effector_poses.names"
+      source_path: "tcp_poses.names"
+      required: false
+    - target_key: "end_effector_poses.pose"
+      source_path: "tcp_poses.pose"
+      required: false
+    # 图片：get_observation 已统一为 jpeg bytes 原始字节直传（# 不解码再压缩），transform 仅透传校验
+    - target_key: "images.color.head"
+      source_path: "images.head"
+      transforms: jpeg_passthrough
+      required: false
+    - target_key: "images.color.wrist_left"
+      source_path: "images.wrist_left"
+      transforms: jpeg_passthrough
+      required: false
+    - target_key: "images.color.wrist_right"
+      source_path: "images.wrist_right"
+      transforms: jpeg_passthrough
+      required: false
+
+# ── 下行: R2C action step → adapter.send_action() 入参 ────────────────
+# 双臂按 joint_states.names 匹配：action 只含单臂（names 缺另一
+# 臂）时对应 target 整体跳过——缺失的臂不下发控制指令。
+#   joint 模式: left_joints/right_joints = 按 names 提取的各臂 7 关节弧度
+#   笛卡尔模式: left_pose/right_pose = end_effector_poses 按 names(左末端/
+#               右末端) 提取的 Pose7D
+#   夹爪: grippers = end_effector_states 按 names(左夹爪/右夹爪) 提取 0-10
+#   腰部不随 action 下发（extensions 通道已删除）：控制走
+#   {project_id}/{device_id}/waist_command topic（见系统配置）
+r2c_to_device:
+  mappings:
+    - target: "left_joints"
+      source: "joint_states.position"
+      source_name_ref: ["左肩俯仰", "左肩横滚", "左肩偏航", "左肘俯仰", "左腕横滚", "左腕偏航", "左腕俯仰"]
+      required: false
+    - target: "right_joints"
+      source: "joint_states.position"
+      source_name_ref: ["右肩俯仰", "右肩横滚", "右肩偏航", "右肘俯仰", "右腕横滚", "右腕偏航", "右腕俯仰"]
+      required: false
+    - target: "left_gripper"
+      source: "end_effector_states.position"
+      source_name_ref: "左夹爪"
+      required: false
+    - target: "right_gripper"
+      source: "end_effector_states.position"
+      source_name_ref: "右夹爪"
+      required: false
+    - target: "left_pose"
+      source: "end_effector_poses.左末端.pose"
+      # transforms: 
+      # - transpose: [1,0]
+      required: false
+    - target: "right_pose"
+      source: "end_effector_poses.右末端.pose"
+      required: false

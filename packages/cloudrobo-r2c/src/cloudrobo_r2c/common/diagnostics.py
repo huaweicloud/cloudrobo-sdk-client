@@ -32,7 +32,9 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-_IPV4_RE = re.compile(r"^(?P<a>\d{1,3})\.(?P<b>\d{1,3})\.(?P<c>\d{1,3})\.(?P<d>\d{1,3})$")
+_IPV4_RE = re.compile(
+    r"^(?P<a>\d{1,3})\.(?P<b>\d{1,3})\.(?P<c>\d{1,3})\.(?P<d>\d{1,3})$"
+)
 
 
 def _mask_ipv4(host: str) -> str:

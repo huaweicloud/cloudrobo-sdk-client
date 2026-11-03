@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 
+from cloudrobo_r2c.common.utils import summarize_observation_for_log
 from cloudrobo_r2c.core.interfaces import IRobotHardwareAdapter
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,9 @@ class Moz1HardwareAdapter(IRobotHardwareAdapter):
 
     _driver: Any = field(default=None, init=False, repr=False)
     _connected: bool = field(default=False, init=False, repr=False)
-    _last_observation: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
-
+    _last_observation: Dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     CAMERA_KEYS: List[str] = field(
         default_factory=lambda: ["cam_high", "cam_left_wrist", "cam_right_wrist"],
@@ -102,9 +104,13 @@ class Moz1HardwareAdapter(IRobotHardwareAdapter):
         self._camera_resolutions = str(
             self.config.get("camera_resolutions", "320*240, 320*240, 320*240")
         )
-        self._enable_soft_realtime = bool(self.config.get("enable_soft_realtime", False))
+        self._enable_soft_realtime = bool(
+            self.config.get("enable_soft_realtime", False)
+        )
         self._bind_cpu_idxs: Optional[List[int]] = self.config.get("bind_cpu_idxs")
-        self._disabled_cameras: Optional[List[str]] = self.config.get("disabled_cameras")
+        self._disabled_cameras: Optional[List[str]] = self.config.get(
+            "disabled_cameras"
+        )
 
     def _build_sdk_config(self) -> _MOZ1RobotConfig:
         """由 adapter 配置字段构建 MOZ1RobotConfig。"""
@@ -194,31 +200,45 @@ class Moz1HardwareAdapter(IRobotHardwareAdapter):
         try:
             obs = self._driver.capture_observation()
         except Exception as e:
-            logger.warning("capture_observation failed, returning last observation: %s", e)
+            logger.warning(
+                "capture_observation failed, returning last observation: %s", e
+            )
             return dict(self._last_observation)
 
         if obs is None:
-            logger.warning("capture_observation returned None, returning last observation")
+            logger.warning(
+                "capture_observation returned None, returning last observation"
+            )
             return dict(self._last_observation)
 
         # --- 过滤掉全黑图像（相机未就绪时 SDK 返回全黑占位） ---
         for cam_key in self.CAMERA_KEYS:
             if cam_key in obs:
                 img = obs[cam_key]
-                arr = np.asarray(img) if img is not None else np.array([], dtype=np.uint8)
+                arr = (
+                    np.asarray(img) if img is not None else np.array([], dtype=np.uint8)
+                )
                 if arr.size == 0 or np.all(arr == 0):
                     logger.debug("Camera %s returned blank frame, excluding", cam_key)
                     del obs[cam_key]
 
         # --- 预拼接字段供 Translator 映射使用 ---
         # 左右臂 7+7=14 维关节列表
-        left_joint = np.asarray(obs.get("leftarm_state_joint_pos", np.zeros(7)), dtype=np.float64).reshape(-1)
-        right_joint = np.asarray(obs.get("rightarm_state_joint_pos", np.zeros(7)), dtype=np.float64).reshape(-1)
+        left_joint = np.asarray(
+            obs.get("leftarm_state_joint_pos", np.zeros(7)), dtype=np.float64
+        ).reshape(-1)
+        right_joint = np.asarray(
+            obs.get("rightarm_state_joint_pos", np.zeros(7)), dtype=np.float64
+        ).reshape(-1)
         obs["joint_positions"] = np.concatenate([left_joint, right_joint])
 
         # 左右夹爪 2 维列表
-        left_grip = np.asarray(obs.get("leftarm_gripper_state_pos", [0.0]), dtype=np.float64).reshape(-1)
-        right_grip = np.asarray(obs.get("rightarm_gripper_state_pos", [0.0]), dtype=np.float64).reshape(-1)
+        left_grip = np.asarray(
+            obs.get("leftarm_gripper_state_pos", [0.0]), dtype=np.float64
+        ).reshape(-1)
+        right_grip = np.asarray(
+            obs.get("rightarm_gripper_state_pos", [0.0]), dtype=np.float64
+        ).reshape(-1)
         obs["gripper_positions"] = np.concatenate([left_grip, right_grip])
 
         self._last_observation = obs
@@ -242,11 +262,10 @@ class Moz1HardwareAdapter(IRobotHardwareAdapter):
         # 调试模式：只打印 action，不执行
         dry_run = self.config.get("dry_run", False)
         if dry_run:
-            obs_without_images = {
-                k: v for k, v in self._last_observation.items()
-                if not isinstance(v, np.ndarray)
-            }
-            logger.info("[DRY_RUN] observation: %s", obs_without_images)
+            logger.info(
+                "[DRY_RUN] observation: %s",
+                summarize_observation_for_log(self._last_observation),
+            )
             logger.info("[DRY_RUN] action: %s", command)
             return
 
@@ -296,7 +315,9 @@ class Moz1HardwareAdapter(IRobotHardwareAdapter):
             )
 
         if not action:
-            logger.warning("send_action received empty command (no Moz SDK-recognized fields)")
+            logger.warning(
+                "send_action received empty command (no Moz SDK-recognized fields)"
+            )
             return
 
         # 确保外部跟随模式已启用

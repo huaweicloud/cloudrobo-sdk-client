@@ -6,10 +6,11 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
+from cloudrobo_r2c.client.mode_control import ModeControl
 from cloudrobo_r2c.client.session import R2CSession
-from cloudrobo_r2c.common.models import Actions, Observations
+from cloudrobo_r2c.common.models import Actions, CommandMessage, Observations
 from cloudrobo_r2c.common.utils.keyboard_controller import KeyboardController
 from cloudrobo_r2c.common.utils.logging_sanitizer import (
     fmt_size,
@@ -34,9 +35,112 @@ _RESERVED_KEYBOARD_COMMANDS = {"pause_resume", "graceful_stop"}
 _RESERVED_KEYBOARD_KEYS = {" ", "q"}  # must match keyboard_mapper.RESERVED_KEYS
 
 
+def _maybe_start_heartbeats(*, session: Any, robot_config: Mapping[str, Any]) -> None:
+    """按 ``runtime.heartbeat`` 配置启动心跳自动发布（缺省开启，2Hz）。
+
+    发布到主 session 的 ``{project_id}/{device_id}/state/heartbeats``
+    topic（Heartbeat 消息），经 forwarder 上云。``enabled: false`` 显式
+    关闭。``mode`` 枚举：AUTO（自动/非遥操，默认）/ CONTROLLED（遥操
+    控制中）；运行期经 ``session.set_heartbeat_mode`` 切换。
+    """
+    runtime_cfg = robot_config.get("runtime", {})
+    if not isinstance(runtime_cfg, Mapping):
+        return
+
+    raw_hb_cfg = runtime_cfg.get("heartbeat", {})
+    if not isinstance(raw_hb_cfg, Mapping):
+        enabled = bool(raw_hb_cfg)
+        hb_cfg: Mapping[str, Any] = {}
+    else:
+        hb_cfg = raw_hb_cfg
+        enabled = bool(hb_cfg.get("enabled", True))
+
+    # 幂等守卫：heartbeats 已在运行（如 run_edge_client 与 from_config
+    # 双调用）直接跳过——不重复 start（RuntimeError），也不重挂
+    # _heartbeat_state（运行中 provider 闭包引用首个字典，重挂会使
+    # set_heartbeat_mode 写到 provider 读不到的新字典）
+    running_loop = getattr(session, "_hb_loop", None)
+    if running_loop is not None and running_loop.is_running():
+        logger.debug(
+            "Heartbeats already running on session %r; duplicate "
+            "_maybe_start_heartbeats() ignored.",
+            type(session).__name__,
+        )
+        return
+
+    if not enabled:
+        logger.info("Heartbeat auto publish is disabled by config.")
+        return
+
+    interval_ms = int(hb_cfg.get("interval_ms", 500))
+    jitter_ms = int(hb_cfg.get("jitter_ms", 50))
+    status = str(hb_cfg.get("status", "ONLINE"))
+    mode = str(hb_cfg.get("mode", "AUTO"))
+    # 电量百分比：**可不配置，不配置时心跳帧不上传 battery 字段**（部分
+    # 机型无 BMS 上送，此前缺省固定 100% 有误导性）；配置了才校验并上报
+    raw_battery = hb_cfg.get("battery_percentage")
+    battery_percentage: Optional[float] = None
+    if raw_battery is not None:
+        battery_percentage = float(raw_battery)
+        if not (0.0 <= battery_percentage <= 100.0):
+            raise ValueError(
+                "runtime.heartbeat.battery_percentage must be within "
+                f"[0, 100], got {battery_percentage}"
+            )
+
+    if interval_ms <= 0:
+        raise ValueError("runtime.heartbeat.interval_ms must be > 0")
+    if jitter_ms < 0:
+        raise ValueError("runtime.heartbeat.jitter_ms must be >= 0")
+    if mode not in ("AUTO", "CONTROLLED", "ASSISTED"):
+        raise ValueError(
+            "runtime.heartbeat.mode must be 'AUTO', 'CONTROLLED' or 'ASSISTED', "
+            f"got {mode!r}"
+        )
+
+    # 可变状态：运行期经 session.set_heartbeat_mode 切换 mode
+    # （如遥操进入 CONTROLLED / 退出回 AUTO）
+    hb_state = {"status": status, "mode": mode}
+    try:
+        session._heartbeat_state = hb_state
+    except Exception:
+        logger.warning(
+            "failed to attach _heartbeat_state on %s "
+            "(mode switching will NOT work)",
+            type(session).__name__,
+            exc_info=True,
+        )
+
+    def _provider() -> Dict[str, Any]:
+        frame: Dict[str, Any] = {
+            "timestamp": int(time.time() * 1000),
+            "status": hb_state["status"],
+            "mode": hb_state["mode"],
+        }
+        if battery_percentage is not None:
+            frame["battery"] = {"percentage": battery_percentage}
+        return frame
+
+    session.start_heartbeats(
+        provider=_provider,
+        interval_ms=interval_ms,
+        jitter_ms=jitter_ms,
+    )
+    logger.info(
+        "Heartbeat auto publish started (interval_ms=%s, jitter_ms=%s, "
+        "status=%s, mode=%s, battery_percentage=%s).",
+        interval_ms,
+        jitter_ms,
+        status,
+        mode,
+        battery_percentage if battery_percentage is not None
+        else "not uploaded (unset)",
+    )
+
+
 def _validate_keymap_commands(keymap: dict, adapter: Any) -> None:
     """Validate that every command name in *keymap* references a
-    registered command instance or is a reserved lifecycle command.
+    registered command instance or a reserved lifecycle command.
 
     Raises :class:`ValueError` on unknown command names.
     """
@@ -175,6 +279,148 @@ def _estimate_raw_size(obj: Any) -> int:
     return total
 
 
+def _merge_custom_hardware(
+    robot_config: Mapping[str, Any], hardware_class: Optional[str]
+) -> dict:
+    """Return a copy of *robot_config* with a custom hardware section applied.
+
+    When *hardware_class* is provided, the ``hardware`` section is replaced
+    with ``type=custom`` plus ``class_path`` (kept from the config's own
+    ``hardware`` block when present, otherwise empty).  Otherwise the config
+    is returned unchanged (copied).
+    """
+    mutable_robot_config = dict(robot_config)
+    if not hardware_class:
+        return mutable_robot_config
+    hardware_section = mutable_robot_config.get("hardware")
+    merged_hardware = (
+        dict(hardware_section) if isinstance(hardware_section, Mapping) else {}
+    )
+    merged_hardware["type"] = "custom"
+    merged_hardware["class_path"] = hardware_class
+    mutable_robot_config["hardware"] = merged_hardware
+    return mutable_robot_config
+
+
+def _parse_runtime_scalars(
+    runtime_cfg: Mapping[str, Any], default_backlog: int
+) -> dict:
+    """Parse the simple scalar runtime options shared by all clients."""
+    return {
+        "target_fps": int(runtime_cfg.get("publish_hz", 30)),
+        "action_response_timeout_s": float(
+            runtime_cfg.get("action_response_timeout_s", 1.0)
+        ),
+        "action_response_timeout_initial_s": float(
+            runtime_cfg.get("action_response_timeout_initial_s", 3.0)
+        ),
+        "action_response_timeout_backoff": float(
+            runtime_cfg.get("action_response_timeout_backoff", 2.0)
+        ),
+        "max_action_backlog": int(
+            runtime_cfg.get("max_action_backlog", default_backlog)
+        ),
+        "max_enqueue_actions_per_chunk": int(
+            runtime_cfg.get("max_enqueue_actions_per_chunk", -1)
+        ),
+        "enable_action_chunk_alignment": bool(
+            runtime_cfg.get("enable_action_chunk_alignment", False)
+        ),
+        "skip_initial_observations": int(
+            runtime_cfg.get("skip_initial_observations", 1)
+        ),
+        "dry_run": bool(runtime_cfg.get("dry_run", False)),
+    }
+
+
+def _parse_async_request_options(runtime_cfg: Mapping[str, Any]) -> dict:
+    """Parse the ``async_request`` / ``fusion`` runtime config section.
+
+    Returns a dict with ``publish_trigger_threshold``, ``fusion_strategy``,
+    ``fusion_window_size``, ``state_types`` and ``state_type_order``.
+    """
+    async_req_cfg_raw = runtime_cfg.get("async_request")
+    async_req_cfg: Mapping[str, Any] = (
+        async_req_cfg_raw if isinstance(async_req_cfg_raw, Mapping) else {}
+    )
+    if not async_req_cfg.get("enabled", False):
+        return {
+            "publish_trigger_threshold": 0,
+            "fusion_strategy": "replace",
+            "fusion_window_size": 10,
+            "state_types": None,
+            "state_type_order": {},
+        }
+
+    fusion_cfg_raw = async_req_cfg.get("fusion")
+    fusion_cfg: Mapping[str, Any] = (
+        fusion_cfg_raw if isinstance(fusion_cfg_raw, Mapping) else {}
+    )
+    raw_state_types = fusion_cfg.get("state_types")
+    raw_order = fusion_cfg.get("state_type_order", {})
+    return {
+        "publish_trigger_threshold": int(
+            async_req_cfg.get("publish_trigger_threshold", 0)
+        ),
+        "fusion_strategy": str(fusion_cfg.get("strategy", "replace")),
+        "fusion_window_size": int(fusion_cfg.get("window_size", 10)),
+        "state_types": (
+            [str(s) for s in raw_state_types]
+            if isinstance(raw_state_types, list)
+            else None
+        ),
+        "state_type_order": (
+            {str(k): str(v) for k, v in raw_order.items()}
+            if isinstance(raw_order, Mapping)
+            else {}
+        ),
+    }
+
+
+def _resolve_keyboard_options(
+    keyboard_cfg: Mapping[str, Any], hardware_adapter: IRobotHardwareAdapter
+) -> dict:
+    """Resolve keyboard-control flags and validated keymap from config."""
+    keyboard_control_enabled = bool(keyboard_cfg.get("enabled", False))
+    raw_keymap = keyboard_cfg.get("keymap")
+    keyboard_keymap = (
+        {str(k): str(v) for k, v in raw_keymap.items()}
+        if isinstance(raw_keymap, dict)
+        else None
+    )
+    if keyboard_control_enabled and keyboard_keymap:
+        _validate_keymap_commands(keyboard_keymap, hardware_adapter)
+    return {
+        "keyboard_control_enabled": keyboard_control_enabled,
+        "keyboard_keymap": keyboard_keymap,
+    }
+
+
+def _build_mode_callbacks(
+    hardware_adapter: IRobotHardwareAdapter, runtime_cfg: Mapping[str, Any]
+) -> dict:
+    """Build mode-control callbacks from ``runtime.mode_control`` config."""
+    mode_control_cfg = runtime_cfg.get("mode_control") or {}
+    mode_callbacks: dict = {}
+    for _action, _key in (
+        ("teleop_enter", "teleop_enter_cb"),
+        ("teleop_exit", "teleop_exit_cb"),
+        ("assist_enter", "assist_enter_cb"),
+        ("assist_exit", "assist_exit_cb"),
+    ):
+        _cb_name = mode_control_cfg.get(_key)
+        if not _cb_name:
+            continue
+        _cb = getattr(hardware_adapter, str(_cb_name), None)
+        if not callable(_cb):
+            raise ValueError(
+                f"runtime.mode_control.{_key}: {_cb_name!r} is not a "
+                f"callable attribute of {type(hardware_adapter).__name__}"
+            )
+        mode_callbacks[_action] = _cb
+    return mode_callbacks
+
+
 @dataclass
 class SyncRobotClient:
     """Threading-based robot edge client for the Observations/Actions flow.
@@ -283,6 +529,8 @@ class SyncRobotClient:
         self._actions_consumed_since_publish: int = 0
         self._latest_observation_id: int = 0
 
+        self.mode_control: Optional[ModeControl] = None
+
     @property
     def _async_enabled(self) -> bool:
         """``True`` when async request with preemptive publishing is enabled.
@@ -304,118 +552,59 @@ class SyncRobotClient:
         recorder: Optional[ObservationRecorder] = None,
     ) -> "SyncRobotClient":
         """Create client from edge config while allowing custom class overrides."""
-        mutable_robot_config = dict(robot_config)
-
-        if hardware_class:
-            hardware_section = mutable_robot_config.get("hardware")
-            merged_hardware = (
-                dict(hardware_section) if isinstance(hardware_section, Mapping) else {}
-            )
-            merged_hardware["type"] = "custom"
-            merged_hardware["class_path"] = hardware_class
-            mutable_robot_config["hardware"] = merged_hardware
+        mutable_robot_config = _merge_custom_hardware(robot_config, hardware_class)
 
         hardware_adapter = RobotFactory.create_hardware_adapter(mutable_robot_config)
         translator = DeviceTranslatorFactory.create_device_translator(
             mutable_robot_config,
             translator_class=translator_class,
         )
+
         runtime_cfg = robot_config.get("runtime", {})
         if not isinstance(runtime_cfg, Mapping):
             runtime_cfg = {}
-        target_fps = int(runtime_cfg.get("publish_hz", 30))
-        action_response_timeout_s = float(
-            runtime_cfg.get("action_response_timeout_s", 1.0)
-        )
-        action_response_timeout_initial_s = float(
-            runtime_cfg.get("action_response_timeout_initial_s", 3.0)
-        )
-        action_response_timeout_backoff = float(
-            runtime_cfg.get("action_response_timeout_backoff", 2.0)
-        )
-        max_action_backlog = int(
-            runtime_cfg.get("max_action_backlog", max_action_backlog)
-        )
-        max_enqueue_actions_per_chunk = int(
-            runtime_cfg.get("max_enqueue_actions_per_chunk", -1)
-        )
-        enable_action_chunk_alignment = bool(
-            runtime_cfg.get("enable_action_chunk_alignment", False)
-        )
+        r = _parse_runtime_scalars(runtime_cfg, max_action_backlog)
+        a = _parse_async_request_options(runtime_cfg)
+
         keyboard_cfg = runtime_cfg.get("keyboard_control", {})
         if not isinstance(keyboard_cfg, Mapping):
             keyboard_cfg = {}
-        keyboard_control_enabled = bool(keyboard_cfg.get("enabled", False))
         _validate_keyboard_config(keyboard_cfg)
-        # ── async_request config section ──────────────────────────────
-        async_req_cfg_raw = runtime_cfg.get("async_request")
-        async_req_cfg: Mapping[str, Any] = (
-            async_req_cfg_raw if isinstance(async_req_cfg_raw, Mapping) else {}
-        )
-        async_request_enabled = bool(async_req_cfg.get("enabled", False))
+        k = _resolve_keyboard_options(keyboard_cfg, hardware_adapter)
 
-        fusion_cfg_raw = async_req_cfg.get("fusion")
-        fusion_cfg: Mapping[str, Any] = (
-            fusion_cfg_raw if isinstance(fusion_cfg_raw, Mapping) else {}
+        mode_callbacks = _build_mode_callbacks(hardware_adapter, runtime_cfg)
+        mode_control = ModeControl(
+            callbacks=mode_callbacks,
+            heartbeat_setter=session.set_heartbeat_mode,
         )
 
-        if async_request_enabled:
-            publish_trigger_threshold = int(
-                async_req_cfg.get("publish_trigger_threshold", 0)
-            )
-            fusion_strategy = str(fusion_cfg.get("strategy", "replace"))
-            fusion_window_size = int(fusion_cfg.get("window_size", 10))
-            raw_state_types = fusion_cfg.get("state_types")
-            state_types = (
-                [str(s) for s in raw_state_types]
-                if isinstance(raw_state_types, list)
-                else None
-            )
-            raw_order = fusion_cfg.get("state_type_order", {})
-            state_type_order = (
-                {str(k): str(v) for k, v in raw_order.items()}
-                if isinstance(raw_order, Mapping)
-                else {}
-            )
-        else:
-            publish_trigger_threshold = 0
-            fusion_strategy = "replace"
-            fusion_window_size = 10
-            state_types = None
-            state_type_order = {}
-        # ── end async_request ─────────────────────────────────────────
-        skip_initial_observations = int(runtime_cfg.get("skip_initial_observations", 1))
-        dry_run = bool(runtime_cfg.get("dry_run", False))
-        raw_keymap = keyboard_cfg.get("keymap")
-        keyboard_keymap = (
-            {str(k): str(v) for k, v in raw_keymap.items()}
-            if isinstance(raw_keymap, dict)
-            else None
-        )
-        if keyboard_control_enabled and keyboard_keymap:
-            _validate_keymap_commands(keyboard_keymap, hardware_adapter)
-        return cls(
+        client = cls(
             session=session,
             hardware_adapter=hardware_adapter,
             translator=translator,
-            target_fps=target_fps,
-            max_action_backlog=max_action_backlog,
-            action_response_timeout_s=action_response_timeout_s,
-            action_response_timeout_initial_s=action_response_timeout_initial_s,
-            action_response_timeout_backoff=action_response_timeout_backoff,
-            max_enqueue_actions_per_chunk=max_enqueue_actions_per_chunk,
-            enable_action_chunk_alignment=enable_action_chunk_alignment,
-            keyboard_control_enabled=keyboard_control_enabled,
-            keyboard_keymap=keyboard_keymap,
-            dry_run=dry_run,
+            target_fps=r["target_fps"],
+            max_action_backlog=r["max_action_backlog"],
+            action_response_timeout_s=r["action_response_timeout_s"],
+            action_response_timeout_initial_s=r["action_response_timeout_initial_s"],
+            action_response_timeout_backoff=r["action_response_timeout_backoff"],
+            max_enqueue_actions_per_chunk=r["max_enqueue_actions_per_chunk"],
+            enable_action_chunk_alignment=r["enable_action_chunk_alignment"],
+            keyboard_control_enabled=k["keyboard_control_enabled"],
+            keyboard_keymap=k["keyboard_keymap"],
+            dry_run=r["dry_run"],
             recorder=recorder,
-            publish_trigger_threshold=publish_trigger_threshold,
-            fusion_strategy=fusion_strategy,
-            fusion_window_size=fusion_window_size,
-            skip_initial_observations=skip_initial_observations,
-            state_types=state_types,
-            state_type_order=state_type_order,
+            publish_trigger_threshold=a["publish_trigger_threshold"],
+            fusion_strategy=a["fusion_strategy"],
+            fusion_window_size=a["fusion_window_size"],
+            skip_initial_observations=r["skip_initial_observations"],
+            state_types=a["state_types"],
+            state_type_order=a["state_type_order"],
         )
+        # 心跳自动发布（runtime.heartbeat，缺省开启 500ms/次即 2Hz）：所有经
+        # from_config 构建的客户端统一启用
+        _maybe_start_heartbeats(session=session, robot_config=robot_config)
+        client.mode_control = mode_control
+        return client
 
     @property
     def running(self) -> bool:
@@ -467,6 +656,7 @@ class SyncRobotClient:
         self._stop_requested.clear()
         self._running.set()
         self._subscribe_actions()
+        self._subscribe_commands()
         if self.keyboard_control_enabled:
             self._keyboard_controller = KeyboardController(
                 adapter=self.hardware_adapter,
@@ -526,10 +716,46 @@ class SyncRobotClient:
 
         self.session.subscribe_actions(_on_actions)
 
+    def _subscribe_commands(self) -> None:
+        """Subscribe the cloud ``command`` topic directly (not via topic binding).
+
+        参考 ``cloudrobo_r2c.camera.command_handler``：模式切换请求（teleop/assist
+        进出）由 sync_client 直接消费，不再经 adapter 的 ``on_command``。
+        ``mode_control`` 未构建（非 from_config 路径）时仅记日志忽略。
+        """
+        if self.mode_control is None:
+            logger.debug("_subscribe_commands: no ModeControl; command ignored")
+            return
+        topic = (
+            f"{self.session.project_id}/{self.session.device_id}/command"
+        )
+
+        def _on_command(payload: bytes) -> None:
+            try:
+                message = CommandMessage.from_protobuf(payload)
+            except Exception:
+                logger.exception(
+                    "Failed to parse command payload (%d bytes)",
+                    len(payload),
+                )
+                return
+            self.mode_control.request(message.command_type)
+
+        self.session.transport.subscribe(topic, _on_command)
+        logger.info("subscribed cloud command topic: %s", topic)
+
     def _enqueue_action_chunk(self, actions: Actions) -> None:
         if self._paused.is_set():
             logger.debug("Dropping incoming action chunk because flow is paused.")
             return
+
+        # ── Preemptive chunk (id == -1) ────────────────────────────────
+        # 抢占式动作：清空当前队列，本 chunk 全部步骤直接入队；
+        # 不参与 stale 检查 / chunk 对齐 / n-skip / 异步融合。
+        if int(actions.id) == -1:
+            self._enqueue_preemptive_chunk(actions)
+            return
+        # ── end preemptive chunk ───────────────────────────────────────
 
         # Stale response check is deferred to the lock-protected enqueue
         # section below so it sees a consistent view of _latest_observation_id
@@ -584,31 +810,93 @@ class SyncRobotClient:
 
         if self._async_enabled:
             new_steps = self._apply_n_skip(new_steps, consumed_since_publish)
-            with self._action_state_lock:
-                if self._paused.is_set():
-                    logger.debug(
-                        "Dropping incoming action chunk because flow is paused."
-                    )
-                    self._awaiting_action.clear()
-                elif self._is_stale_action(action_id):
-                    self._awaiting_action.clear()
-                else:
-                    self._enqueue_with_fusion(new_steps)
-                    self._awaiting_action.clear()
+            self._enqueue_under_lock(
+                action_id, new_steps, self._enqueue_with_fusion
+            )
             self._fusion_in_progress.clear()
         else:
+            self._enqueue_under_lock(action_id, new_steps, self._push_all_steps)
+
+    def _enqueue_under_lock(
+        self,
+        action_id: int,
+        new_steps: List[ScheduledActionStep],
+        enqueue_fn: Callable[[List[ScheduledActionStep]], None],
+    ) -> None:
+        """Enqueue *new_steps* under the action-state lock unless dropped.
+
+        Shared by the async and non-async paths: the flow-paused guard and
+        the stale-action check are identical, only the underlying enqueue
+        routine differs (fusion vs plain per-step push).
+        """
+        with self._action_state_lock:
+            if self._paused.is_set():
+                logger.debug(
+                    "Dropping incoming action chunk because flow is paused."
+                )
+                self._awaiting_action.clear()
+            elif self._is_stale_action(action_id):
+                # 过期 action 丢弃即可，**不重发观测**：重发会使
+                # _latest_observation_id 前进，把云端在途的更新 action
+                # 也作废（重发风暴）。保持 awaiting，等针对最新观测的
+                # action 到达；超时兜底由 action_response_timeout 负责。
+                pass
+            else:
+                enqueue_fn(new_steps)
+                self._awaiting_action.clear()
+
+    def _push_all_steps(self, new_steps: List[ScheduledActionStep]) -> None:
+        """Push every step in *new_steps* onto the action queue."""
+        for step in new_steps:
+            self._push_action_step(step)
+
+    def _enqueue_preemptive_chunk(self, actions: Actions) -> None:
+        """Handle a preemptive chunk (``id == -1``).
+
+        语义：放弃队列中尚未执行的 action，立即切换到本 chunk 的序列。
+        跳过 stale 检查、chunk 对齐、n-skip 与异步融合（不与旧序列混合）。
+        """
+        # Gate the control loop for the whole drain+refill window so no
+        # stale step is consumed mid-transition (same reason as fusion).
+        if self._async_enabled:
+            self._fusion_in_progress.set()
+        try:
+            old_depth = self._action_queue.qsize()
+            self._drain_action_queue()
+
+            self._reset_timeout_backoff()
             with self._action_state_lock:
-                if self._paused.is_set():
+                self._awaiting_action.clear()
+
+            chunk_size = max(int(actions.chunk_size or 1), 1)
+            steps_to_enqueue = chunk_size
+            if self.max_enqueue_actions_per_chunk >= 0:
+                steps_to_enqueue = min(
+                    steps_to_enqueue, self.max_enqueue_actions_per_chunk
+                )
+                if chunk_size > steps_to_enqueue:
                     logger.debug(
-                        "Dropping incoming action chunk because flow is paused."
+                        "Dropping %d action steps from preemptive chunk due to "
+                        "max_enqueue_actions_per_chunk=%d",
+                        chunk_size - steps_to_enqueue,
+                        self.max_enqueue_actions_per_chunk,
                     )
-                    self._awaiting_action.clear()
-                elif self._is_stale_action(action_id):
-                    self._awaiting_action.clear()
-                else:
-                    for step in new_steps:
-                        self._push_action_step(step)
-                    self._awaiting_action.clear()
+            base_timestep = self._resolve_action_base_timestep(actions)
+            new_steps = self._build_new_steps(actions, 0, steps_to_enqueue, base_timestep)
+            for step in new_steps:
+                self._push_action_step(step)
+
+            logger.info(
+                "Preemptive action chunk (id=-1): drained %d queued steps, "
+                "enqueued %d preemptive steps (alignment/n-skip/fusion skipped).",
+                old_depth,
+                len(new_steps),
+            )
+        except Exception:
+            logger.exception("Failed to enqueue preemptive action chunk")
+        finally:
+            if self._async_enabled:
+                self._fusion_in_progress.clear()
 
     def _align_actions_to_last_executed(self, actions: Actions, chunk_size: int) -> int:
         if not self.enable_action_chunk_alignment or chunk_size <= 0:
@@ -627,10 +915,10 @@ class SyncRobotClient:
             return 0
 
         max_index = min(len(positions), chunk_size)
-        if max_index <= 0:  # pragma: no cover
+        if max_index <= 0:
             return 0
 
-        last_joint = self._last_executed_chunk_action[:6]
+        last_joint = self._last_executed_chunk_action[:7]
         best_index = 0
         nearest_distance = float("inf")
 
@@ -638,7 +926,7 @@ class SyncRobotClient:
             candidate = positions[idx]
             if not isinstance(candidate, list):
                 continue
-            compare_dims = min(len(last_joint), len(candidate), 6)
+            compare_dims = min(len(last_joint), len(candidate), 7)
             if compare_dims <= 0:
                 continue
             distance = math.sqrt(
@@ -662,7 +950,7 @@ class SyncRobotClient:
                 best_index,
                 nearest_distance,
                 last_joint,
-                positions[best_index][:6],
+                positions[best_index][:7],
             )
         else:
             logger.info(
@@ -751,7 +1039,6 @@ class SyncRobotClient:
                 "odom_pose": _select_step(actions.localization.odom_pose),
                 "map_pose": _select_step(actions.localization.map_pose),
             },
-            # chunk 级共享给每个 step（Actions.extensions 是整块一份，见协议语义）
             "extensions": dict(actions.extensions),
         }
 
@@ -936,13 +1223,13 @@ class SyncRobotClient:
                 continue
 
             self._apply_one_action_step()
-            if self._observation_publish_enabled():
-                self._check_and_publish()
-
             elapsed = time.perf_counter() - loop_start
             sleep_duration = max(0.0, self.environment_dt - elapsed)
             if sleep_duration > 0:
                 time.sleep(sleep_duration)
+            if self._observation_publish_enabled():
+                self._check_and_publish()
+
 
     def _check_and_publish(self) -> None:
         queue_depth = self._action_queue.qsize()

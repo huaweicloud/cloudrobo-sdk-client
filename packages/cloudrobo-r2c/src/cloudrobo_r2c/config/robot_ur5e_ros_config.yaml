@@ -19,7 +19,7 @@
 #        ros2 control switch_controllers --activate scaled_joint_trajectory_controller
 #
 # 用法:
-#   python -m r2c_sdk.cloudroboclient \
+#   python -m cloudrobo_r2c.cloudroboclient \
 #     --client-config config/client_config.yaml \
 #     --robot-config config/robot_ur5e_ros_config.yaml
 # =============================================================================

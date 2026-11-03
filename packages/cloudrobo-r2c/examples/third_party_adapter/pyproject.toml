@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Third-party R2C adapter for MyRobot"
 requires-python = ">=3.10"
 dependencies = [
-    "hw-r2c-sdk",
+    "hw-cloudrobo-r2c",
 ]
 
 # ═════════════════════════════════════════════════════════════════════

@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+// 数据回流上传大屏 —— 质检概览上报数据结构。
+//
+// 云端不再调 OBS 查询，端侧上传时把质检汇总信息打包上报，
+// 云端后端写入 MySQL，大屏从 MySQL 统计展示。
+//
+// 质检基于安全/效率/平稳度三维度评分体系（参考《数据评测算子说明》《评分规则设计》）：
+// - 安全维度满分 40 分（关节限位风险、峰值速度关注、关节最大速度）
+// - 效率维度满分 30 分（时长长尾、冻结时长）
+// - 平稳度维度满分 30 分（微抖动频带、Jerk 尖峰、动作抖动、位置残差抖动）
+// - 总分 100 分，每条规则按风险等级线性衰减：良好=100% / 中等=60% / 严重=0
+// - 训练准入建议：≥85 可训练，70-85 建议复检，<70 建议返工
+//
+// 时间字段统一使用【毫秒】(int64)；得分/个数字段为 int32。
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "DataQualityOverviewProto";
+option java_multiple_files = false;
+
+
+// ============================================================================
+// 质检概览汇总
+// ============================================================================
+message DataQualityOverview {
+
+  // 消息终端源: {project_id}/{device_id}
+  string source = 1;
+
+  // 时间戳（毫秒）
+  int64 timestamp = 2;
+
+  // 已质检的轨迹条数
+  int32 total_files = 3;
+
+  // 评分体系（用于雷达图和总分展示）
+  int32 safe_score = 4;          // 安全维度得分（满分40）
+  int32 efficiency_score = 5;    // 效率维度得分（满分30）
+  int32 stability_score = 6;     // 平稳性维度得分（满分30）
+  int32 total_score = 7;         // 综合总分（满分100）
+
+  int32 safe_level = 8;          // 安全风险等级（0=良好, 1=中等, 2=严重）
+  int32 efficiency_level = 9;    // 效率风险等级（0=良好, 1=中等, 2=严重）
+  int32 stability_level = 10;     // 平稳性风险等级（0=良好, 1=中等, 2=严重）
+
+  // 安全维度统计
+  int32 safe_count = 11;         // 安全维度问题总数
+  int32 safe_high = 12;          // 安全高风险个数
+  int32 safe_medium = 13;        // 安全中风险个数
+  int32 safe_low = 14;           // 安全低风险个数
+
+  // 效率维度统计
+  int32 efficiency_count = 15;   // 效率维度问题总数
+  int32 efficiency_high = 16;    // 效率高风险个数
+  int32 efficiency_medium = 17;  // 效率中风险个数
+  int32 efficiency_low = 18;     // 效率低风险个数
+
+  // 平稳性维度统计
+  int32 stability_count = 19;    // 平稳性维度问题总数
+  int32 stability_high = 20;     // 平稳性高风险个数
+  int32 stability_medium = 21;   // 平稳性中风险个数
+  int32 stability_low = 22;      // 平稳性低风险个数
+
+  // 有风险的轨迹数量
+  int32 risk_trajectory_num = 23;
+}

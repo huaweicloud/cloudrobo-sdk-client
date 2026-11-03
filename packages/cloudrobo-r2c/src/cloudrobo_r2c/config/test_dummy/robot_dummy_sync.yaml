@@ -43,10 +43,8 @@ hardware:
         w: 640
         c: 3
       wrist:
-        h: 480
-        w: 640
-        c: 3
-        
+        file: ../images/wrist_sample.png
+
     commands:
       go_home:
         type: go_home

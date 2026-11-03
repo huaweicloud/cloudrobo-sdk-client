@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from google.protobuf.timestamp_pb2 import Timestamp
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .validators import (
     ValidationError,
@@ -54,7 +54,7 @@ def _validate_battery(battery_data: Dict[str, Any]) -> BatteryStatus:
 try:
     from ..generated import heartbeat_pb2
 except Exception:
-    heartbeat_pb2 = None
+    heartbeat_pb2: Any = None  # type: ignore[no-redef]
 
 
 @dataclass
@@ -71,7 +71,8 @@ class Heartbeat:
     mode: str
     source: str = ""
     error_code: List[int] = field(default_factory=list)
-    battery: BatteryStatus = field(default_factory=BatteryStatus)
+    # None = 不上传 battery（序列化不含该字段）；配置了才上传
+    battery: Optional[BatteryStatus] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> Heartbeat:
@@ -87,6 +88,8 @@ class Heartbeat:
                     - percentage (float): 0-100
                     - voltage (float): >= 0
                     - current (float): any value
+                  Omitted/None = battery NOT uploaded (frame carries no
+                  battery field); provide the dict to upload it.
 
         Returns:
             Heartbeat object constructed from the input data
@@ -114,7 +117,10 @@ class Heartbeat:
         else:
             validate_type(error_code, list, "error_code", "Heartbeat")
 
-        battery = _validate_battery(data.get("battery", {}))
+        # battery 缺省/显式 None = 不上传（pb 序列化不含 battery 字段）；
+        # 显式给出 dict 才校验并上传
+        raw_battery = data.get("battery")
+        battery = _validate_battery(raw_battery) if raw_battery is not None else None
 
         return cls(
             timestamp=timestamp,
@@ -133,10 +139,14 @@ class Heartbeat:
         pb = heartbeat_pb2.Heartbeat()
         pb.ParseFromString(payload)
 
-        battery = BatteryStatus(
-            percentage=pb.battery.percentage,
-            voltage=pb.battery.voltage,
-            current=pb.battery.current,
+        battery = (
+            BatteryStatus(
+                percentage=pb.battery.percentage,
+                voltage=pb.battery.voltage,
+                current=pb.battery.current,
+            )
+            if pb.HasField("battery")
+            else None
         )
 
         return cls(
@@ -162,7 +172,8 @@ class Heartbeat:
             pb.source = self.source
         pb.error_code.extend(self.error_code)
 
-        if self.battery:
+        # battery=None（未配置）不上传：不触碰 pb.battery，序列化不含该字段
+        if self.battery is not None:
             pb.battery.percentage = self.battery.percentage
             pb.battery.voltage = self.battery.voltage
             pb.battery.current = self.battery.current

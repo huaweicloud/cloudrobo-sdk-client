@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from cloudrobo_r2c.core.interfaces import IRobotHardwareAdapter
+from cloudrobo_r2c.common.utils import summarize_observation_for_log
+from cloudrobo_r2c.core.interfaces import ICameraFrameSource, IRobotHardwareAdapter
 
 
 def create_flexiv_adapter(
@@ -116,7 +117,7 @@ OBSERVATION_NAMES: List[str] = _build_observation_names(10)
 
 
 @dataclass
-class FlexivHardwareAdapter(IRobotHardwareAdapter):
+class FlexivHardwareAdapter(IRobotHardwareAdapter, ICameraFrameSource):
     """Flexiv robot hardware adapter."""
 
     config: Mapping[str, Any]
@@ -557,6 +558,30 @@ class FlexivHardwareAdapter(IRobotHardwareAdapter):
             }
         result["camera_meta"] = camera_meta
 
+    # ── ICameraFrameSource（相机推流共享帧槽） ──────────────────────────────
+
+    def get_latest_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """返回指定相机的最近一帧 BGR 图像（H, W, 3）uint8，无帧返回 None。
+
+        转发 ``_CameraSlot.get()``（内部加锁副本）。相机未配置、采集线程
+        异常或无帧时返回 None。
+        """
+        slot = self._camera_slots.get(camera_id)
+        if slot is None:
+            return None
+        frame, timestamp, error = slot.get()
+        if error is not None or frame is None:
+            return None
+        return frame.copy()
+
+    def get_latest_timestamp(self, camera_id: str) -> float:
+        """返回指定相机的最近一帧采集时间戳（time.monotonic()），无帧返回 0.0。"""
+        slot = self._camera_slots.get(camera_id)
+        if slot is None:
+            return 0.0
+        _, timestamp, _ = slot.get()
+        return float(timestamp)
+
     def send_action(self, command: Mapping[str, Any]) -> None:
         """发送动作命令
 
@@ -570,13 +595,10 @@ class FlexivHardwareAdapter(IRobotHardwareAdapter):
         # 调试模式：只打印 action，不执行实际动作
         dry_run = self.config.get("dry_run", False)
         if dry_run:
-            # 排除图像字段，只保留数值数据
-            obs_without_images = {
-                k: v
-                for k, v in self._last_observation.items()
-                if not isinstance(v, np.ndarray)
-            }
-            logger.info(f"[DRY_RUN] observation: {obs_without_images}")
+            logger.info(
+                "[DRY_RUN] observation: %s",
+                summarize_observation_for_log(self._last_observation),
+            )
             logger.info(f"[DRY_RUN] action: {command}")
             return
 

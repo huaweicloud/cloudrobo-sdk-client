@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any, Mapping
 
-from cloudrobo_r2c.common.models import Observations
+from cloudrobo_r2c.common.models.wrappers.observations import Observations
 from cloudrobo_r2c.core.config_mapper import ConfigDrivenMapper
 from cloudrobo_r2c.core.interfaces import IDeviceTranslator, ObservationLike
 from cloudrobo_r2c.core.internal.helpers import (next_global_observation_id,
@@ -41,11 +41,15 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         # expected during startup (cameras initialising, etc.).
         if self._obs_mapper:
             incomplete = self._obs_mapper.check_completeness(mapping)
-            if incomplete:
+            if incomplete.get("required"):
+                not_ready: list[str] = []
+                if incomplete.get("required"):
+                    not_ready.extend(incomplete["required"])
+                if incomplete.get("optional"):
+                    not_ready.extend(incomplete["optional"])
                 logger.warning(
-                    "Observation incomplete - skipping tick. "
-                    "Not ready: %s",
-                    ", ".join(incomplete),
+                    "Observation incomplete - skipping tick. " "Not ready: %s",
+                    ", ".join(not_ready),
                 )
                 return None  # sentinel: skip this tick
 
@@ -57,18 +61,18 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         mapped = self._obs_mapper.map(mapping) if self._obs_mapper else dict(mapping)
 
         observation_dict.update(mapped)
-        try:
-            return Observations.from_dict(observation_dict)
-        except Exception as exc:
-            logger.warning(
-                "Failed to device_to_r2c: %s",
-                exc,
-                exc_info=True,
-            )
-            return mapped
+        # No fallback here: a failure to build the Observation model is a
+        # hard error and propagates to the caller.  Returning the raw
+        # mapped dict instead used to mask the root cause - the dict lacks
+        # timestamp/task and would later fail in publish_observations with
+        # a misleading "Missing required field(s): timestamp, task".
+        return Observations.from_dict(observation_dict)
 
     def r2c_to_device(self, action_step: Mapping[str, Any]) -> Any:
         mapping = to_mapping(action_step)
+        for ext_k in mapping["extensions"]:
+            mapping["extensions"][ext_k] = action_step["extensions"][ext_k].ext_decode()
+
         device_command = (
             self._r2c_to_device_mapper.map(mapping)
             if self._r2c_to_device_mapper

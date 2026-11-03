@@ -1,0 +1,157 @@
+schema_version: v3.4
+default_serial_transform: msgpack_pack
+default_deserial_transform: msgpack_unpack
+routes:
+- name: default
+  protocol:
+    type: ws
+    endpoint: "{{HOST_URL}}/"
+    probe: true
+    connect_strategy: eager
+  r2c_to_model:
+  - source_path: task
+    target_path: task
+  - source_path: joint_states.position
+    target_path: observation.state
+    source_name_ref: ["左肩俯仰", "左肩横滚", "左肩偏航", "左肘俯仰", "左腕横滚", "左腕偏航", "左腕俯仰"]
+    transforms: list_to_ndarray
+    list_mode: extend
+    use_assign_dotted: false
+  - source_path: end_effector_poses.pose
+    target_path: observation.state
+    source_name_ref: ["左末端"]
+    transforms: 
+    - index: {"index": 0}
+    - list_to_ndarray
+    list_mode: extend
+    use_assign_dotted: false
+  - source_path: end_effector_states.position
+    target_path: observation.state
+    source_name_ref: ["左夹爪"]
+    transforms: list_to_ndarray
+    list_mode: extend
+    use_assign_dotted: false
+  - source_path: joint_states.position
+    target_path: observation.state
+    source_name_ref: ["右肩俯仰", "右肩横滚", "右肩偏航", "右肘俯仰", "右腕横滚", "右腕偏航", "右腕俯仰"]
+    transforms: list_to_ndarray
+    list_mode: extend
+    use_assign_dotted: false
+  - source_path: end_effector_poses.pose
+    target_path: observation.state
+    source_name_ref: ["右末端"]
+    transforms: 
+    - index: {"index": 0}
+    - list_to_ndarray
+    list_mode: extend
+    use_assign_dotted: false
+  - source_path: end_effector_states.position
+    target_path: observation.state
+    source_name_ref: ["右夹爪"]
+    transforms: list_to_ndarray
+    list_mode: extend
+    use_assign_dotted: false
+  - source_path: images.color.head
+    target_path: observation.images.head
+    use_assign_dotted: false
+    transforms:
+    - jpeg_to_ndarray
+    - rgb_to_bgr
+  - source_path: images.color.wrist_left
+    target_path: observation.images.left_wrist
+    use_assign_dotted: false
+    transforms:
+    - jpeg_to_ndarray
+    - rgb_to_bgr
+  - source_path: images.color.wrist_right
+    target_path: observation.images.right_wrist
+    use_assign_dotted: false
+    transforms:
+    - jpeg_to_ndarray
+    - rgb_to_bgr
+  model_to_r2c:
+  - default: ["右肩俯仰", "右肩横滚", "右肩偏航", "右肘俯仰", "右腕横滚", "右腕偏航", "右腕俯仰"]
+    target_path: joint_states.names
+  - default: ["右夹爪"]
+    target_path: end_effector_states.names
+  - source_path: payload.actions
+    source_index: [":", ":", 0]
+    target_index: [":", 0]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 1]
+    target_index: [":", 1]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 2]
+    target_index: [":", 2]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 3]
+    target_index: [":", 3]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 4]
+    target_index: [":", 4]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 5]
+    target_index: [":", 5]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 6]
+    target_index: [":", 6]
+    target_path: joint_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+  - source_path: payload.actions
+    source_index: [":", ":", 7]
+    target_index: [":", 0]
+    target_path: end_effector_states.position
+    transforms: 
+    - transpose: [1,0]
+    # - array_to_list
+    # list_mode: extend
+    use_assign_dotted: true
+    use_lookup_dotted: true
+

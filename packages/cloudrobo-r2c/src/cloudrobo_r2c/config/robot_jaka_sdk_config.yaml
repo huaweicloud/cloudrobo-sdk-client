@@ -6,12 +6,12 @@
 #
 # 配合 cloud_jaka_config.yaml 使用:
 #   1. 启动推理服务 (云端):
-#        uv run python -m r2c_sdk.inference.r2c_lerobot_policy_server \
+#        uv run python -m cloudrobo_r2c.inference.r2c_lerobot_policy_server \
 #          --cloud-config config/cloud_jaka_config.yaml \
 #          --client-config config/client_config.yaml \
 #          --project-id test-tenant --device-id jaka-001
 #   2. 启动边缘端 (本配置):
-#        uv run python -m r2c_sdk.cloudroboclient \
+#        uv run python -m cloudrobo_r2c.cloudroboclient \
 #          --client-config config/client_config.yaml \
 #          --robot-config config/robot_jaka_sdk_config.yaml
 #

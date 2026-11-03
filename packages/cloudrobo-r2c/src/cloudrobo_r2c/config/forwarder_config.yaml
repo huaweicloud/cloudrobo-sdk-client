@@ -1,0 +1,68 @@
+# forwarder_config.yaml（连云会话：forwarder_session，身份/证书由 --bundle 提供，本文件不写 bundle）
+forwarder_session:                  # 唯一会话（连云；mode=client 连云）
+  mode: "client"
+
+topic_defaults:                     # 全局默认（新能力）：对所有 topic 生效，route 级可覆盖
+  sample_min_interval_s: 0.5
+  cache_size: 20
+
+routes:
+  # 上行：本地 主 session(main，连本地 zenohd) → forwarder_session(云，--bundle)
+  - from: "{project_id}/{device_id}/inference/observations"
+    to: "{project_id}/{device_id}/inference/observations"
+    from_session: "main"
+    to_session: "forwarder_session"
+    proto: "cloudrobo_r2c.common.models:Observations"
+    cache_size: 0  # 不缓存
+    sample_min_interval_s: 0.1
+  - from: "{project_id}/{device_id}/event"
+    to: "{project_id}/{device_id}/event"
+    from_session: "main"
+    to_session: "forwarder_session"
+    proto: "cloudrobo_r2c.common.models:EventMessage"
+  - from: "{project_id}/{device_id}/job/task"
+    to: "{project_id}/{device_id}/job/task"
+    from_session: "main"
+    to_session: "forwarder_session"
+    proto: "cloudrobo_r2c.common.models:TaskProcessMessage"
+  - from: "{project_id}/{device_id}/state/current"
+    to: "{project_id}/{device_id}/state/current"
+    from_session: "main"
+    to_session: "forwarder_session"
+    proto: "cloudrobo_r2c.common.models:RunTimeMessage"
+    sample_min_interval_s: 0.2
+    cache_size: 0 # 不缓存
+  - from: "{project_id}/{device_id}/state/heartbeats"
+    to: "{project_id}/{device_id}/state/heartbeats"
+    from_session: "main"
+    to_session: "forwarder_session"
+    proto: "cloudrobo_r2c.common.models:Heartbeat"
+    cache_size: 0 # 不缓存
+  - from: "{project_id}/{device_id}/data_ingestion/upload_status"
+    to: "{project_id}/{device_id}/data_ingestion/upload_status"
+    from_session: "main"
+    to_session: "forwarder_session"
+    proto: "cloudrobo_r2c.common.models.generated.data_upload_progress_pb2:DataUploadProgress"
+  # 下行：forwarder_session(云) → 主 session(main，本地 zenohd) → 各本地 client（action/command：不套降采样，全局默认同样适用/可覆盖）
+  - from: "{project_id}/{device_id}/inference/actions"
+    to: "{project_id}/{device_id}/inference/actions"
+    from_session: "forwarder_session"
+    to_session: "main"
+    proto: "cloudrobo_r2c.common.models:Actions"
+    cache_size: 0 # 不缓存
+  - from: "{project_id}/{device_id}/job/command"
+    to: "{project_id}/{device_id}/job/command"
+    from_session: "forwarder_session"
+    to_session: "main"
+  - from: "{project_id}/{device_id}/job/action"
+    to: "{project_id}/{device_id}/job/action"
+    from_session: "forwarder_session"
+    to_session: "main"
+  - from: "{project_id}/{device_id}/device/camera_capability"
+    to: "{project_id}/{device_id}/device/camera_capability"
+    from_session: "forwarder_session"
+    to_session: "main"
+  - from: "{project_id}/{device_id}/device/token_renew_request"
+    to: "{project_id}/{device_id}/device/token_renew_request"
+    from_session: "forwarder_session"
+    to_session: "main"

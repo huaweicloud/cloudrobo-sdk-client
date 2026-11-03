@@ -17,7 +17,10 @@ Dashboard、CI 校验)能够以结构化方式理解"这个机器人产生什么
 
 1. **只读、纯函数** — 输入是 config dict,输出是结构化 schema,无副作用
 2. **复用 ``MapperRule.from_mapping()``** — 与运行时共享同一套 YAML 解析器,
-   保证 schema 描述与运行时行为一致;解析失败的单条规则被跳过(容错,日志 warning)
+   保证 schema 描述与运行时行为一致;坏规则(解析失败、duplicate target、
+   ``extensions.*`` 缺 ``extension`` 块等)直接抛出 ``ValueError``,
+   与 ``cloudroboclient.load_yaml`` 的启动校验一致
+   (共享 ``collect_mapping_config_errors``),不再静默跳过
 3. **完整覆盖** — 覆盖 ``MapperRule`` 的全部字段(包括 ``extension``、
    ``transforms``、``list_mode`` 等高级特性)
 4. **人类可读 + 机器可读** — 所有模型提供 ``to_dict()``,可直接 ``json.dumps()``
@@ -34,11 +37,10 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple, Union
 
 import yaml
 
-# NOTE: ``MapperRule`` is imported lazily inside ``_iter_mapper_rules`` (not at
-# module top level) to break a package-level circular import:
-# ``core.config_mapper -> core.interfaces -> common.models -> common.schema ->
-# core.config_mapper``.  Importing ``cloudrobo_r2c.robots.robot_factory`` (or
-# any top-level package member) otherwise fails during collection/import.
+from cloudrobo_r2c.core.config_mapper import (
+    MapperRule,
+    collect_mapping_config_errors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -361,25 +363,24 @@ def _iter_mapper_rules(
 ) -> Iterator[MapperRule]:
     """遍历 config 某一 section 下的 mappings,解析为 MapperRule。
 
-    解析失败的单条规则被跳过并记录 warning(容错),不中断整个提取。
+    严格模式:解析失败直接抛出 ``ValueError``。调用方
+    (:meth:`RobotConfigSchema.from_dict`) 会先通过
+    ``collect_mapping_config_errors`` 聚合校验,因此走到这里的规则
+    预期全部可解析;若仍失败则上抛,不再静默跳过。
     """
-    # Lazy import — see the note at the top of this module about the
-    # package-level circular import with ``core.config_mapper``.
-    from cloudrobo_r2c.core.config_mapper import MapperRule
-
     section = config.get(section_key, {})
     if not isinstance(section, Mapping):
         return
     raw_mappings = section.get("mappings", [])
     if not isinstance(raw_mappings, list):
         return
-    for i, raw in enumerate(raw_mappings):
+    for raw in raw_mappings:
         if not isinstance(raw, Mapping):
-            continue
-        try:
-            yield MapperRule.from_mapping(raw)
-        except (ValueError, KeyError, TypeError) as exc:
-            logger.warning("%s.mappings[%d] 解析失败,已跳过: %s", section_key, i, exc)
+            raise ValueError(
+                f"{section_key}.mappings 中存在非 mapping 条目: "
+                f"{type(raw).__name__}"
+            )
+        yield MapperRule.from_mapping(raw)
 
 
 @dataclass(frozen=True)
@@ -527,7 +528,15 @@ class RobotConfigSchema:
 
     @classmethod
     def from_dict(cls, config: Mapping[str, Any]) -> "RobotConfigSchema":
-        """从 config dict 提取 schema(纯函数,无副作用)。"""
+        """从 config dict 提取 schema(纯函数,无副作用)。
+
+        坏规则(解析失败、duplicate target、``extensions.*`` 缺
+        ``extension`` 块等)直接抛出 ``ValueError``,与启动时校验行为一致。
+        """
+        errors = collect_mapping_config_errors(config)
+        if errors:
+            lines = "\n".join(f"  - {err}" for err in errors)
+            raise ValueError("Robot config schema validation failed:\n" + lines)
         hardware_type = _section_type(config, "hardware")
         translator_type = _section_type(config, "translator")
         return cls(

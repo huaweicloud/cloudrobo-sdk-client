@@ -1,5 +1,5 @@
 # Third-party adapter 端到端验证配置
-# 使用: uv run python -m r2c_sdk.cloudroboclient --robot-config ./examples/third_party_adapter/robot_my_robot_config.yaml
+# 使用: uv run python -m cloudrobo_r2c.cloudroboclient --robot-config ./examples/third_party_adapter/robot_my_robot_config.yaml
 
 runtime:
   publish_hz: 30.0

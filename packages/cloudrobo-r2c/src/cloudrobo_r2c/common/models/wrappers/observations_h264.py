@@ -11,8 +11,13 @@ from cloudrobo_r2c.common.utils import BytesEncoder
 from cloudrobo_r2c.common.utils.h264_encoder import H264ImageEncoder
 from .common import ExtensionValue
 from .observations import (
-    JointStates, EndEffectorPoses, EndEffectorStates,
-    Localization, PointCloud, Observations, _parse_extensions
+    JointStates,
+    EndEffectorPoses,
+    EndEffectorStates,
+    Localization,
+    PointCloud,
+    Observations,
+    _parse_extensions,
 )
 
 logger = logging.getLogger(__name__)
@@ -20,20 +25,23 @@ logger = logging.getLogger(__name__)
 
 class ValidationError(ValueError):
     """Raised when input data validation fails."""
+
     pass
+
 
 # Try to import generated Protobuf code
 try:
     # Note: Now using unified observation_pb2, H264 defined in image_h264.proto
     from ..generated import observation_pb2, image_h264_pb2
 except Exception:
-    observation_pb2 = None
+    observation_pb2: Any = None  # type: ignore[no-redef]
     image_h264_pb2 = None
 
 
 @dataclass
 class ImageShape:
     """Image shape (height, width, channels)"""
+
     height: int
     width: int
     channels: int
@@ -48,20 +56,23 @@ class ImageShape:
     def to_tuple(self) -> Tuple[int, int, int]:
         """Convert to tuple (H, W, C)."""
         return (self.height, self.width, self.channels)
-    
+
     def __getitem__(self, index):
         """Support index access (for compatibility)."""
-        if index == 0: return self.height
-        if index == 1: return self.width
-        if index == 2: return self.channels
+        if index == 0:
+            return self.height
+        if index == 1:
+            return self.width
+        if index == 2:
+            return self.channels
         raise IndexError("ImageShape index out of range")
-        
+
     def __iter__(self):
         """Support unpacking (h, w, c = shape)."""
         yield self.height
         yield self.width
         yield self.channels
-    
+
     def __repr__(self):
         return f"ImageShape(height={self.height}, width={self.width}, channels={self.channels})"
 
@@ -69,6 +80,7 @@ class ImageShape:
 @dataclass
 class H264ImageMetadata:
     """Metadata for H264 encoded images."""
+
     image_keys: List[str] = field(default_factory=list)
     original_shapes: List[ImageShape] = field(default_factory=list)
     combined_shape: Union[ImageShape, None] = None
@@ -82,6 +94,7 @@ class H264ImageMetadata:
 @dataclass
 class H264ImageData:
     """H264 encoded image data main body."""
+
     h264_data: bytes = b""
     metadata: H264ImageMetadata = field(default_factory=H264ImageMetadata)
 
@@ -89,6 +102,7 @@ class H264ImageData:
 @dataclass
 class ObservationsH264:
     """Robot observation data main body (H264 Encoded)."""
+
     timestamp: int
     task: str
     id: int = 0
@@ -107,48 +121,48 @@ class ObservationsH264:
     @staticmethod
     def parse_joint_states(data: Dict[str, Any]) -> JointStates:
         """Parse joint_states field into JointStates model."""
-        joint_states_data = data.get('joint_states', {})
+        joint_states_data = data.get("joint_states", {})
         return JointStates(
-            names=joint_states_data.get('names', []),
-            position=joint_states_data.get('position', []),
-            velocity=joint_states_data.get('velocity', []),
-            torque=joint_states_data.get('torque', []),
+            names=joint_states_data.get("names", []),
+            position=joint_states_data.get("position", []),
+            velocity=joint_states_data.get("velocity", []),
+            torque=joint_states_data.get("torque", []),
         )
 
     @staticmethod
     def parse_end_effector_poses(data: Dict[str, Any]) -> EndEffectorPoses:
         """Parse end_effector_poses field into EndEffectorPoses model."""
-        ee_poses_data = data.get('end_effector_poses', {})
+        ee_poses_data = data.get("end_effector_poses", {})
         return EndEffectorPoses(
-            names=ee_poses_data.get('names', []),
-            pose=ee_poses_data.get('pose', []),
+            names=ee_poses_data.get("names", []),
+            pose=ee_poses_data.get("pose", []),
         )
 
     @staticmethod
     def parse_end_effector_states(data: Dict[str, Any]) -> EndEffectorStates:
         """Parse end_effector_states field into EndEffectorStates model."""
-        ee_states_data = data.get('end_effector_states', {})
+        ee_states_data = data.get("end_effector_states", {})
         return EndEffectorStates(
-            names=ee_states_data.get('names', []),
-            position=ee_states_data.get('position', []),
-            force=ee_states_data.get('force', []),
+            names=ee_states_data.get("names", []),
+            position=ee_states_data.get("position", []),
+            force=ee_states_data.get("force", []),
         )
 
     @staticmethod
     def parse_localization(data: Dict[str, Any]) -> Localization:
         """Parse localization field into Localization model."""
-        localization_data = data.get('localization', {})
+        localization_data = data.get("localization", {})
         return Localization(
-            odom_pose=localization_data.get('odom_pose', []),
-            map_pose=localization_data.get('map_pose', []),
+            odom_pose=localization_data.get("odom_pose", []),
+            map_pose=localization_data.get("map_pose", []),
         )
 
     @staticmethod
     def parse_pointclouds(data: Dict[str, Any]) -> List[PointCloud]:
         """Parse pointclouds field into list of PointCloud models."""
         return [
-            PointCloud(data=pc['data'], name=pc.get('name', ''))
-            for pc in data.get('pointclouds', [])
+            PointCloud(data=pc["data"], name=pc.get("name", ""))
+            for pc in data.get("pointclouds", [])
         ]
 
     @classmethod
@@ -189,7 +203,9 @@ class ObservationsH264:
             raise ValidationError("No images found in observation for H264 encoding")
 
         encoder = encoder or H264ImageEncoder()
-        encoded_payload, _ = encoder.encode_images({"images": image_sources}, preset=preset)
+        encoded_payload, _ = encoder.encode_images(
+            {"images": image_sources}, preset=preset
+        )
 
         images_section = encoded_payload.get("images", {})
         h264_bytes = images_section.get("h264_data", b"")
@@ -207,7 +223,11 @@ class ObservationsH264:
 
         # original_shapes: List[tuple] -> List[ImageShape]
         metadata.original_shapes = [
-            shape if isinstance(shape, ImageShape) else ImageShape.from_tuple(tuple(shape))
+            (
+                shape
+                if isinstance(shape, ImageShape)
+                else ImageShape.from_tuple(tuple(shape))
+            )
             for shape in metadata_dict.get("original_shapes", [])
         ]
 
@@ -230,16 +250,16 @@ class ObservationsH264:
         pointclouds = cls.parse_pointclouds(data)
 
         return cls(
-            timestamp=data['timestamp'],
-            task=data['task'],
-            id=data.get('id', 0),
+            timestamp=data["timestamp"],
+            task=data["task"],
+            id=data.get("id", 0),
             images=images,
             joint_states=joint_states,
             end_effector_poses=ee_poses,
             end_effector_states=ee_states,
             localization=localization,
             pointclouds=pointclouds,
-            extensions=_parse_extensions(data.get('extensions', {})),
+            extensions=_parse_extensions(data.get("extensions", {})),
         )
 
     @classmethod
@@ -265,7 +285,9 @@ class ObservationsH264:
             raise ValueError("No images found in observation for H264 encoding")
 
         encoder = encoder or H264ImageEncoder()
-        encoded_payload, _ = encoder.encode_images({"images": image_sources}, preset=preset)
+        encoded_payload, _ = encoder.encode_images(
+            {"images": image_sources}, preset=preset
+        )
 
         images_section = encoded_payload.get("images", {})
         h264_bytes = images_section.get("h264_data", b"")
@@ -275,13 +297,17 @@ class ObservationsH264:
             image_keys=metadata_dict.get("image_keys", []),
             merge_direction=metadata_dict.get("merge_direction", ""),
             frame_count=metadata_dict.get("frame_count", 0),
-            quality_preset=str(metadata_dict.get('quality_preset', '')),
+            quality_preset=str(metadata_dict.get("quality_preset", "")),
             speed_preset=metadata_dict.get("speed_preset", ""),
             crf_used=metadata_dict.get("crf_used", 0),
         )
 
         metadata.original_shapes = [
-            shape if isinstance(shape, ImageShape) else ImageShape.from_tuple(tuple(shape))
+            (
+                shape
+                if isinstance(shape, ImageShape)
+                else ImageShape.from_tuple(tuple(shape))
+            )
             for shape in metadata_dict.get("original_shapes", [])
         ]
 
@@ -312,38 +338,35 @@ class ObservationsH264:
     def from_dict(cls, data: Dict[str, Any]) -> ObservationsH264:
         """Construct ObservationsH264 object from dict."""
         # Process H264 image data
-        images_data = data.get('images', {})
-        h264_data = images_data.get('h264_data', b'')
-        
+        images_data = data.get("images", {})
+        h264_data = images_data.get("h264_data", b"")
+
         # Process metadata
-        metadata_dict = images_data.get('metadata', {})
+        metadata_dict = images_data.get("metadata", {})
         metadata = H264ImageMetadata(
-            image_keys=metadata_dict.get('image_keys', []),
-            merge_direction=metadata_dict.get('merge_direction', ''),
-            frame_count=metadata_dict.get('frame_count', 0),
-            quality_preset=metadata_dict.get('quality_preset', ''),
-            speed_preset=metadata_dict.get('speed_preset', ''),
-            crf_used=metadata_dict.get('crf_used', 0)
+            image_keys=metadata_dict.get("image_keys", []),
+            merge_direction=metadata_dict.get("merge_direction", ""),
+            frame_count=metadata_dict.get("frame_count", 0),
+            quality_preset=metadata_dict.get("quality_preset", ""),
+            speed_preset=metadata_dict.get("speed_preset", ""),
+            crf_used=metadata_dict.get("crf_used", 0),
         )
-        
+
         # Process original_shapes: List[tuple] -> List[ImageShape]
-        original_shapes_data = metadata_dict.get('original_shapes', [])
+        original_shapes_data = metadata_dict.get("original_shapes", [])
         metadata.original_shapes = [
             ImageShape.from_tuple(tuple(shape)) for shape in original_shapes_data
         ]
-        
+
         # Process combined_shape: tuple -> ImageShape
-        combined_shape_data = metadata_dict.get('combined_shape')
+        combined_shape_data = metadata_dict.get("combined_shape")
         if combined_shape_data:
             if isinstance(combined_shape_data, (tuple, list)):
                 metadata.combined_shape = ImageShape.from_tuple(combined_shape_data)
             else:
-                raise ValidationError('Combined shape format error')
-        
-        images = H264ImageData(
-            h264_data=h264_data,
-            metadata=metadata
-        )
+                raise ValidationError("Combined shape format error")
+
+        images = H264ImageData(h264_data=h264_data, metadata=metadata)
 
         # Process joint states (reuse existing class)
         joint_states = cls.parse_joint_states(data)
@@ -353,16 +376,16 @@ class ObservationsH264:
         pointclouds = cls.parse_pointclouds(data)
 
         return cls(
-            timestamp=data['timestamp'],
-            task=data['task'],
-            id=data.get('id', 0),
+            timestamp=data["timestamp"],
+            task=data["task"],
+            id=data.get("id", 0),
             images=images,
             joint_states=joint_states,
             end_effector_poses=ee_poses,
             end_effector_states=ee_states,
             localization=localization,
             pointclouds=pointclouds,
-            extensions=_parse_extensions(data.get('extensions', {})),
+            extensions=_parse_extensions(data.get("extensions", {})),
         )
 
     @classmethod
@@ -372,7 +395,7 @@ class ObservationsH264:
         if pb.HasField("h264_images"):
             img_pb = pb.h264_images
             metadata = H264ImageMetadata()
-            if img_pb.HasField('metadata'):
+            if img_pb.HasField("metadata"):
                 meta_pb = img_pb.metadata
                 metadata = H264ImageMetadata(
                     image_keys=list(meta_pb.image_keys),
@@ -381,9 +404,19 @@ class ObservationsH264:
                     quality_preset=meta_pb.quality_preset,
                     speed_preset=meta_pb.speed_preset,
                     crf_used=meta_pb.crf_used,
-                    original_shapes=[ImageShape(s.height, s.width, s.channels) for s in meta_pb.original_shapes],
-                    combined_shape=ImageShape(meta_pb.combined_shape.height, meta_pb.combined_shape.width, meta_pb.combined_shape.channels)
-                    if meta_pb.HasField('combined_shape') else None,
+                    original_shapes=[
+                        ImageShape(s.height, s.width, s.channels)
+                        for s in meta_pb.original_shapes
+                    ],
+                    combined_shape=(
+                        ImageShape(
+                            meta_pb.combined_shape.height,
+                            meta_pb.combined_shape.width,
+                            meta_pb.combined_shape.channels,
+                        )
+                        if meta_pb.HasField("combined_shape")
+                        else None
+                    ),
                 )
             images = H264ImageData(h264_data=img_pb.h264_data, metadata=metadata)
 
@@ -392,11 +425,27 @@ class ObservationsH264:
             task=pb.task,
             id=pb.id,
             images=images,
-            joint_states=JointStates(list(pb.joint_states.names), list(pb.joint_states.position), list(pb.joint_states.velocity), list(pb.joint_states.torque)),
-            end_effector_poses=EndEffectorPoses(list(pb.end_effector_poses.names), [list(pose.data) for pose in pb.end_effector_poses.pose]),
-            end_effector_states=EndEffectorStates(list(pb.end_effector_states.names), list(pb.end_effector_states.position), list(pb.end_effector_states.force)),
-            localization=Localization(list(pb.localization.odom_pose), list(pb.localization.map_pose)),
-            pointclouds=[PointCloud(data=pc.data, name=pc.name) for pc in pb.pointclouds],
+            joint_states=JointStates(
+                list(pb.joint_states.names),
+                list(pb.joint_states.position),
+                list(pb.joint_states.velocity),
+                list(pb.joint_states.torque),
+            ),
+            end_effector_poses=EndEffectorPoses(
+                list(pb.end_effector_poses.names),
+                [list(pose.data) for pose in pb.end_effector_poses.pose],
+            ),
+            end_effector_states=EndEffectorStates(
+                list(pb.end_effector_states.names),
+                list(pb.end_effector_states.position),
+                list(pb.end_effector_states.force),
+            ),
+            localization=Localization(
+                list(pb.localization.odom_pose), list(pb.localization.map_pose)
+            ),
+            pointclouds=[
+                PointCloud(data=pc.data, name=pc.name) for pc in pb.pointclouds
+            ],
             extensions=ExtensionValue.from_proto_extensions(pb.extensions),
         )
 
@@ -404,7 +453,9 @@ class ObservationsH264:
     def from_protobuf(cls, payload: bytes) -> ObservationsH264:
         """Parse binary Protobuf data into ObservationsH264 object."""
         if observation_pb2 is None:
-            raise ImportError("Protobuf code not generated, please run protoc to compile observation.proto")
+            raise ImportError(
+                "Protobuf code not generated, please run protoc to compile observation.proto"
+            )
 
         pb = observation_pb2.Observations()
         pb.ParseFromString(payload)
@@ -413,7 +464,9 @@ class ObservationsH264:
     def to_protobuf(self) -> Any:
         """Convert to Protobuf message object."""
         if observation_pb2 is None:
-            raise ImportError("Protobuf code not generated, please run protoc to compile observation.proto")
+            raise ImportError(
+                "Protobuf code not generated, please run protoc to compile observation.proto"
+            )
 
         obs_pb = observation_pb2.Observations()
         obs_pb.timestamp = self.timestamp
@@ -445,7 +498,9 @@ class ObservationsH264:
         obs_pb.joint_states.torque.extend(self.joint_states.torque)
         obs_pb.end_effector_poses.names.extend(self.end_effector_poses.names)
         for p in self.end_effector_poses.pose:
-            obs_pb.end_effector_poses.pose.add().data.extend(p.data if hasattr(p, 'data') else p)
+            obs_pb.end_effector_poses.pose.add().data.extend(
+                p.data if hasattr(p, "data") else p
+            )
         obs_pb.end_effector_states.names.extend(self.end_effector_states.names)
         obs_pb.end_effector_states.position.extend(self.end_effector_states.position)
         obs_pb.end_effector_states.force.extend(self.end_effector_states.force)
@@ -455,7 +510,7 @@ class ObservationsH264:
             pc_msg = obs_pb.pointclouds.add()
             pc_msg.data = pc.data
             pc_msg.name = pc.name
-        # ── extensions ─────────────────────────────────────────
+            
         for key, ev in self.extensions.items():
             ev_pb = obs_pb.extensions[key]
             ev_pb.dtype = ev.to_proto_dtype()
@@ -475,4 +530,4 @@ class ObservationsH264:
         """Serialize to JSON bytes."""
         data = {"observations_h264": asdict(self)}
         json_str = json.dumps(data, cls=BytesEncoder)
-        return json_str.encode('utf-8')
+        return json_str.encode("utf-8")

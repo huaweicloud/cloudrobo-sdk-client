@@ -59,6 +59,17 @@ def resolve_password(
     return None
 
 
+def resolve_api_key(*, should_prompt: bool) -> Optional[str]:
+    """Read an API key from a masked stdin prompt when requested.
+
+    The value stays in memory only — it is never written to a config file,
+    YAML, or log. Returns ``None`` when no prompt is requested.
+    """
+    if should_prompt:
+        return getpass.getpass("api_key: ")
+    return None
+
+
 def load_yaml_mapping(path: Optional[str | Path]) -> Mapping[str, Any]:
     """Load a YAML file and return it as a Mapping, or {} if path is empty."""
     if not path:
@@ -106,7 +117,9 @@ def build_session_simple(
                 device_id=client_config.device_id,
                 client_id=client_config.client_id,
                 endpoint_role=_endpoint_role or client_config.endpoint_role,
-                endpoints=tuple(resolved_eps) if resolved_eps else client_config.endpoints,
+                endpoints=(
+                    tuple(resolved_eps) if resolved_eps else client_config.endpoints
+                ),
                 protocol=client_config.protocol,
                 mode=args.mode or client_config.mode,
                 authentication=client_config.authentication,

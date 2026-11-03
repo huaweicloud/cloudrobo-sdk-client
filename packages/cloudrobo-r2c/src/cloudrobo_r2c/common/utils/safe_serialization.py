@@ -243,7 +243,6 @@ def load_frames(file_path: str) -> List[Dict[str, Any]]:
                 block_lens.append(struct.unpack("<I", f.read(4))[0])
 
             # Calculate block offsets relative to first block start
-            block_start = f.tell()
             block_offsets: List[int] = [0]
             acc = 0
             for bl in block_lens[:-1]:
