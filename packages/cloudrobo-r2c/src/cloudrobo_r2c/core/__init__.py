@@ -7,6 +7,7 @@ from .interfaces import (
     IRobotHardwareAdapter,
     IDeviceTranslator,
     IModelTranslator,
+    IPolicyClient,
     IValueTransformer,
 )
 from .transformers import DEFAULT_TRANSFORMERS
@@ -17,6 +18,7 @@ __all__ = [
     "ConfigDrivenMapper",
     "IDeviceTranslator",
     "IModelTranslator",
+    "IPolicyClient",
     "IValueTransformer",
     "DEFAULT_TRANSFORMERS",
 ]

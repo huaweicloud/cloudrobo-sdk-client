@@ -10,7 +10,7 @@
 #   3. 网络可达 Zenoh peer 或 router
 #
 # 用法:
-#   python -m r2c_sdk.cloudroboclient \
+#   python -m cloudrobo_r2c.cloudroboclient \
 #     --client-config config/client_config.yaml \
 #     --robot-config config/robot_zenoh_ros1_config.yaml
 #

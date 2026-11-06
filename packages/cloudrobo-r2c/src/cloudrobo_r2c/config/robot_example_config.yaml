@@ -5,7 +5,7 @@
 # 阅读此文件可了解 R2C 边缘端配置的完整结构和各字段含义。
 #
 # 用法:
-#   python -m r2c_sdk.cloudroboclient --robot-config config/robot_example_config.yaml
+#   python -m cloudrobo_r2c.cloudroboclient --robot-config config/robot_example_config.yaml
 # =============================================================================
 
 schema_version: "v2.1"

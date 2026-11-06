@@ -1,16 +1,19 @@
 import json
 import logging
 import os
+import signal
 import sys
 import time
 from typing import Any, Dict
-
 import yaml
+
+import argparse
+
 from azureloong_app import AzureLoongClient
 from jaka_app import JakaClient
 from moz1_app import Moz1Client
 from robot_common_utils import (ROBOT_R2C_MAPPING_FILE, build_r2c_config,
-                                get_robot_type, load_mapping_file)
+                                ROBOT_TYPE, load_mapping_file, ROBOT_METADATA_PATH)
 from ros_adapter.config import R2CClientConfig
 from ros_adapter.r2c_client_for_me import R2CClientForME
 from so101_app import SO101Client
@@ -18,10 +21,12 @@ from so101_app import SO101Client
 from cloudrobo_r2c.common import Actions
 from cloudrobo_r2c.common.config import ClientConfig as R2CSDKConfig
 from cloudrobo_r2c.common.models import Observations, ObservationsH264
+from cloudrobo_r2c.cloudroboclient import run_edge_client
 
 # 配置日志, 加入代码所在行
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s  - %(lineno)d - %(message)s"
 )
 logger = logging.getLogger(__file__)
@@ -30,23 +35,42 @@ logger.info(f"work_path: {os.getcwd()}")
 # input
 WORKSPACE_ID = os.getenv("WORKSPACE_ID", "test-tenant")
 DEVICE_ID = os.getenv("EXECUTION_ID", "robot-01")
-ROBOT_METADATA_PATH = os.getenv("ROBOT_METADATA_PATH", "/data/workspace/eail/Assets/robots")
-ROBOT_TYPE = get_robot_type(ROBOT_METADATA_PATH)
+CLIENT_ID = os.getenv("CLIENT_ID", "ros2-client-01")
 CONTAINER_IP=os.getenv("CONTAINER_IP", "127.0.0.1")
 if not ROBOT_TYPE:
     raise Exception("robot type is empty")
 PUBLISH_ACTION_RATE = float(os.getenv("PUBLISH_ACTION_RATE", "10.0"))
 PUBLISH_OBSERVATION_RATE = float(os.getenv("PUBLISH_OBSERVATION_RATE", "10.0"))
 
+args = argparse.Namespace(
+    project_id=WORKSPACE_ID,
+    device_id=f"robot-{DEVICE_ID}",
+    client_id=CLIENT_ID,
+    endpoint_role="connect",
+    endpoints=f"tcp/{CONTAINER_IP}:7447",
+    mode="peer",
+    protocol="zenoh",
+    robot_config=f"{ROBOT_METADATA_PATH}/robot_{ROBOT_TYPE}/r2c_{ROBOT_TYPE}.yaml",
+    bundle=None,
+    client_config="",
+    record=None,
+    hardware_class=None,
+    translator_class=None,
+    duration=0.,
+    private_key_password=None,
+    private_key_password_env=None,
+    prompt_password=False
+)
+
 def build_sdk_config() -> R2CSDKConfig:
     sdk_config = R2CSDKConfig(
-        project_id=WORKSPACE_ID,
-        device_id=f"robot-{DEVICE_ID}",
-        client_id="ros2-client-01",
-        endpoint_role="listen",
-        endpoints=[f"tcp/{CONTAINER_IP}:7447"],
-        mode="peer",
-        protocol="zenoh"
+        project_id=args.project_id,
+        device_id=args.device_id,
+        client_id=args.client_id,
+        endpoint_role=args.endpoint_role,
+        endpoints=[args.endpoints],
+        mode=args.mode,
+        protocol=args.protocol
     )
     logger.info(f"Connecting: project={sdk_config.project_id}, target_device={sdk_config.device_id}, client={sdk_config.client_id}")
     return sdk_config
@@ -129,9 +153,10 @@ class R1Client(R2CClientForME):
         return actions
 
 def run():
-    robot_r2c_mapping_info = load_mapping_file(ROBOT_R2C_MAPPING_FILE)
-    if ROBOT_TYPE not in robot_r2c_mapping_info:
-        raise Exception(f"{ROBOT_TYPE} has no ROS topics config ...")
+    def _handle_sigterm(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     if ROBOT_TYPE == "r1":
         client = R1Client("r1_app_node")
     elif ROBOT_TYPE == "qinglong":
@@ -143,8 +168,16 @@ def run():
     elif ROBOT_TYPE == "jaka_minicobo":
         client = JakaClient("jaka_app_node")
     else:
-        logger.error(f"Unsupported robot type for r2c connection: {ROBOT_TYPE}")
+        logger.info(f"Running self-define robot: {ROBOT_TYPE}")
+        try:
+            run_edge_client(args)
+        except KeyboardInterrupt:
+            pass
+        return
     logger.info(f"{type(client)} created")
+    robot_r2c_mapping_info = load_mapping_file(ROBOT_R2C_MAPPING_FILE)
+    if ROBOT_TYPE not in robot_r2c_mapping_info:
+        raise Exception(f"{ROBOT_TYPE} has no ROS topics config ...")
     try:
         r1_r2c_mapping_info = robot_r2c_mapping_info[ROBOT_TYPE]
         r2c_config = build_r2c_config(r1_r2c_mapping_info)

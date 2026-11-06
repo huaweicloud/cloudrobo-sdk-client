@@ -12,7 +12,7 @@
 #   4. 标定 id 改为 follower_a1z (当前实际标定文件)。
 #   5. go_home 关节值更新为 follower_a1z.json 的最新 home_rad。
 #
-# 使用方式: uv run python -m r2c_sdk.cloudroboclient \
+# 使用方式: uv run python -m cloudrobo_r2c.cloudroboclient \
 #             --robot-config config/robot_a1z_lerobot_v2_config.yaml
 #
 # 前提:

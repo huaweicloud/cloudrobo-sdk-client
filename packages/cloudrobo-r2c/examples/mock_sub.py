@@ -21,10 +21,10 @@ Recommended usage:
     python examples/mock_sub.py --bundle /path/to/cert_xxx.zip --duration 30
 
 Optional override:
-    python examples/mock_sub.py --bundle /path/to/cert_xxx.zip --target-device-id robot-02
+    python examples/mock_sub.py --bundle /path/to/cert_xxx.zip --target-device-id local
 
 Advanced explicit mode:
-    python examples/mock_sub.py --project-id test-tenant --target-device-id robot-01 --client-id mock-sub-01
+    python examples/mock_sub.py --project-id r2c --target-device-id local --client-id mock-sub-01
 """
 
 from __future__ import annotations
@@ -69,11 +69,11 @@ def parse_args() -> argparse.Namespace:
     )
 
     # Advanced: explicit ClientConfig mode
-    parser.add_argument("--project-id", type=str, default=None, help="Project ID")
+    parser.add_argument("--project-id", type=str, default="r2c", help="Project ID")
     parser.add_argument(
         "--device-id",
         type=str,
-        default="subscriber",
+        default="local",
         help="Subscriber self device_id in explicit mode",
     )
     parser.add_argument("--client-id", type=str, default=None, help="Client ID")
@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-device-id",
         type=str,
-        default=None,
+        default="local",
         help="Target robot device ID to subscribe to; in bundle mode defaults to bundle robot_id",
     )
     parser.add_argument(
@@ -320,6 +320,7 @@ def main() -> None:
                 logger.info("Duration reached, stopping.")
                 break
             time.sleep(1)
+            client.publish_heartbeats(Heartbeat(timestamp=12312,status='1',mode='2'))
     except KeyboardInterrupt:
         logger.info("Interrupted by user.")
     finally:

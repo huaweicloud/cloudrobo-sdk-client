@@ -8,17 +8,17 @@
 常用启动命令：
 
 1. 自动模式（默认）：
-   `python examples/tsd_cloud_adapter.py --project-id test --device-id tsd`
+   `python examples/tsd_cloud_adapter.py --project-id r2c --device-id local`
 2. 手动模式：
-   `python examples/tsd_cloud_adapter.py --project-id test --device-id tsd --interactive`
-   `python examples/tsd_cloud_adapter.py --project-id test --device-id tsd --it`
+   `python examples/tsd_cloud_adapter.py --project-id r2c --device-id local --interactive`
+   `python examples/tsd_cloud_adapter.py --project-id r2c --device-id local --it`
 
 配套的机器人客户端通常在另一个终端启动：
 
 1. 真实机器人：
-   `python -m cloudrobo_r2c.cloudroboclient --project-id test --device-id tsd --client-config config/client_config.yaml --robot-config config/robot_tsd_config.yaml`
+   `python -m cloudrobo_r2c.cloudroboclient --project-id r2c --device-id local --client-config config/client_config.yaml --robot-config config/robot_tsd_config.yaml`
 2. Dummy:
-   `python -m cloudrobo_r2c.cloudroboclient --project-id test --device-id tsd --client-config config/client_config.yaml --robot-config config/robot_tsd_dummy_config.yaml`
+   `python -m cloudrobo_r2c.cloudroboclient --project-id r2c --device-id local --client-config config/client_config.yaml --robot-config config/robot_tsd_dummy_config.yaml`
 
 当前约束需要明确：
 1. 标准 `Actions` 主链路当前稳定用于关节动作 `movj`
@@ -44,8 +44,8 @@ from cloudrobo_r2c.common.models import Actions
 logger = logging.getLogger(__name__)
 
 ADAPTER_NAME = "TSDCloudAdapter"
-DEFAULT_PROJECT_ID = "test"
-DEFAULT_DEVICE_ID = "tsd"
+DEFAULT_PROJECT_ID = "r2c"
+DEFAULT_DEVICE_ID = "local"
 DEFAULT_CLIENT_ID = "tsd-cloud-adapter"
 
 TSD_STATE_NAMES = [

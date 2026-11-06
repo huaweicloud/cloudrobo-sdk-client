@@ -9,10 +9,9 @@ from typing import List, Any, Dict
 
 from .common import Pose7D
 from .validators import (
-    ValidationError,
     validate_list_items_type,
     validate_optional_list_field,
-    validate_pose7d,
+    validate_pose,
     validate_required_fields,
     validate_string,
     normalize_proto_timestamp,
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 try:
     from ..generated import end_effector_state_pb2
 except Exception:
-    end_effector_state_pb2 = None
+    end_effector_state_pb2: Any = None  # type: ignore[no-redef]
 
 
 @dataclass
@@ -74,7 +73,7 @@ class EndEffectorState:
         # Validate pose (Pose7D - 7 elements)
         pose = data.get("pose", [])
         if pose:
-            pose = validate_pose7d(pose, "pose", "EndEffectorState")
+            pose = validate_pose(pose, "pose", "EndEffectorState")
 
         # Validate list fields if present
         for f in ["state", "velocity", "acceleration", "force", "tactile"]:

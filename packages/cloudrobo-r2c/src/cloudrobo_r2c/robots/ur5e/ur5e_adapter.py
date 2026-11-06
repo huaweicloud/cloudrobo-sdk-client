@@ -79,7 +79,7 @@ class UR5eHardwareAdapter(IRobotHardwareAdapter):
     )
 
     def __post_init__(self) -> None:
-        from cloudrobo_r2c.robots.commands.generic import GoHomeCommand
+        from cloudrobo_r2c.robots.commands.dummy import GoHomeCommand
         self.register_command_class("go_home", GoHomeCommand)
 
     # ------------------------------------------------------------------
@@ -329,6 +329,33 @@ class UR5eHardwareAdapter(IRobotHardwareAdapter):
                 observation[cam.name] = frame
 
         return observation
+
+    # ── ICameraFrameSource（相机推流共享帧槽） ──────────────────────────────
+
+    def get_latest_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """返回指定相机（按 name 匹配 RealSenseCamera）的最近一帧。
+
+        转发 RealSenseCamera.get_latest_frame()（内部加锁副本）。相机
+        未配置或尚无帧时返回 None。
+        """
+        cam = self._find_camera(camera_id)
+        if cam is None:
+            return None
+        return cam.get_latest_frame()
+
+    def get_latest_timestamp(self, camera_id: str) -> float:
+        """返回指定相机的最近一帧采集时间戳，无帧返回 0.0。"""
+        cam = self._find_camera(camera_id)
+        if cam is None:
+            return 0.0
+        return float(cam.get_latest_timestamp())
+
+    def _find_camera(self, camera_id: str) -> Optional[RealSenseCamera]:
+        """按 name 匹配已启动的 RealSenseCamera 实例。"""
+        for cam in self._cameras:
+            if cam.name == camera_id:
+                return cam
+        return None
 
     def send_action(self, command: Mapping[str, Any]) -> None:
         """Send a device-native action command.

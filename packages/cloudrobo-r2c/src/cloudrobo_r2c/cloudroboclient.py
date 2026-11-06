@@ -6,9 +6,10 @@ import argparse
 import logging
 import threading
 import time
+from dataclasses import replace
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence, Union
 
 import yaml
 from pydantic import ValidationError
@@ -21,12 +22,20 @@ from cloudrobo_r2c.common.cli_utils import (
     resolve_password,
 )
 from cloudrobo_r2c.common.config import ClientConfig, ENDPOINT_ROLE
+from cloudrobo_r2c.common.config_path import resolve_config_path
 from cloudrobo_r2c.common.credential_bundle import (
     CredentialBundleError,
     bundle_requires_private_key_password,
 )
 from cloudrobo_r2c.common.utils.recorder import ObservationRecorder
-from cloudrobo_r2c.sync_client import SyncRobotClient
+from cloudrobo_r2c.client.event_manager import event_manager
+from cloudrobo_r2c.client.topic_manager import start_topic_runtime
+from cloudrobo_r2c.sync_client import SyncRobotClient, _maybe_start_heartbeats
+from cloudrobo_r2c.forwarder import (
+    open_forwarder_sessions,
+    parse_forwarder_config,
+    start_forwarder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +95,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default="config/client_config.yaml",
         help="Path to the R2C client config YAML.",
     )
+    parser.add_argument(
+        "--forwarder-config",
+        default=None,
+        help=(
+            "in-process forwarder config (forwarder_session + "
+            "topic_defaults + routes). Only started when both --bundle and "
+            "--forwarder-config are given; otherwise it degrades to pure local "
+            "main line."
+        ),
+    )
 
     parser.add_argument(
         "--private-key-password",
@@ -119,8 +138,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Never prompt for private key password; fail if one is required",
     )
 
-    parser.add_argument("--project-id", type=str, default=None, help="Project ID")
-    parser.add_argument("--device-id", type=str, default=None, help="Device ID")
+    parser.add_argument("--project-id", type=str, default="r2c", help="Project ID")
+    parser.add_argument("--device-id", type=str, default="local", help="Device ID")
     parser.add_argument("--client-id", type=str, default=None, help="Client ID")
     parser.add_argument(
         "--endpoints",
@@ -131,9 +150,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--mode",
         type=str,
-        default="peer",
+        default=None,
         choices=["peer", "client"],
-        help="Connection mode for explicit mode",
+        help=(
+            "Connection mode. When --client-config is given and --mode is "
+            "omitted, the mode is taken from the YAML."
+        ),
     )
     parser.add_argument(
         "--endpoint-role",
@@ -204,11 +226,26 @@ def load_yaml(path: str | Path) -> Mapping[str, Any]:
         from cloudrobo_r2c.common.robot_config_schema import RobotConfig
 
         validated = RobotConfig.model_validate(data)
-        return dict(validated.model_dump(exclude_none=True))
+        robot_config = dict(validated.model_dump(exclude_none=True))
     except ValidationError as exc:
+        raise ValueError(f"Invalid robot config in {file_path}:\n{exc}") from exc
+
+    # mapping rule validation (aggregated, reuses the runtime parser)
+    # Fails fast before build_session() establishes any connection so
+    # config mistakes (e.g. an extension rule without dtype/shape) exit
+    # the program with a specific message instead of surfacing later as
+    # misleading runtime errors (e.g. "Missing required fields timestamp,
+    # task").
+    from cloudrobo_r2c.core.config_mapper import collect_mapping_config_errors
+
+    rule_errors = collect_mapping_config_errors(robot_config)
+    if rule_errors:
+        lines = "\n".join(f"  - {err}" for err in rule_errors)
         raise ValueError(
-            f"Invalid robot config in {file_path}:\n{exc}"
-        ) from exc
+            f"Invalid robot config in {file_path} (mapping rules):\n{lines}"
+        )
+
+    return robot_config
 
 
 def _private_key_requires_password(args: argparse.Namespace) -> bool:
@@ -221,7 +258,7 @@ def _private_key_requires_password(args: argparse.Namespace) -> bool:
     return False
 
 
-def build_session(args: argparse.Namespace):
+def build_session(args: argparse.Namespace, forwarder_active: bool = False):
     has_explicit_password = bool(
         args.private_key_password or args.private_key_password_env
     )
@@ -248,7 +285,7 @@ def build_session(args: argparse.Namespace):
         should_prompt=bool(args.prompt_password and requires_password),
     )
 
-    if args.bundle:
+    if args.bundle and not forwarder_active:
         logger.info("Connecting with platform credential bundle: %s", args.bundle)
         return R2CClient.connect(
             args.bundle,
@@ -265,11 +302,33 @@ def build_session(args: argparse.Namespace):
             args.client_id,
             endpoints=parse_endpoints(args.endpoints) or None,
             mode=args.mode,
+            endpoint_role=args.endpoint_role
         )
-        return R2CClient.connect(
+        # 回退：未显式指定 --mode / --endpoint-role 时（采用 YAML/默认的
+        # connect 语义），若 connect 连接失败则降级为 peer 模式重试一次。
+        if args.mode is None and args.endpoint_role is None:
+            try:
+                session = R2CClient.connect(
+                    client_config,
+                    private_key_password=password,
+                )
+                if forwarder_active:
+                    return session, password
+                return session
+            except R2CConnectionError as exc:
+                logger.warning(
+                    "Main session connect failed (%s); retrying with "
+                    "peer mode",
+                    exc,
+                )
+                client_config = replace(client_config, mode="peer", endpoint_role="listen")
+        session = R2CClient.connect(
             client_config,
             private_key_password=password,
         )
+        if forwarder_active:
+            return session, password
+        return session
 
     if not args.project_id:
         raise ValueError("project_id is required when --bundle is not provided")
@@ -282,10 +341,13 @@ def build_session(args: argparse.Namespace):
         client_id=args.client_id or "sync-robot-client",
         endpoint_role=args.endpoint_role or ENDPOINT_ROLE,
         endpoints=parse_endpoints(args.endpoints),
-        mode=args.mode,
+        mode=args.mode or "peer",
     )
     config.validate()
-    return R2CClient.connect(config, private_key_password=password)
+    session = R2CClient.connect(config, private_key_password=password)
+    if forwarder_active:
+        return session, password
+    return session
 
 
 def build_sync_robot_client(
@@ -302,51 +364,6 @@ def build_sync_robot_client(
         hardware_class=hardware_class,
         translator_class=translator_class,
         recorder=recorder,
-    )
-
-
-def _maybe_start_heartbeats(*, session: Any, robot_config: Mapping[str, Any]) -> None:
-    runtime_cfg = robot_config.get("runtime", {})
-    if not isinstance(runtime_cfg, Mapping):
-        return
-
-    raw_hb_cfg = runtime_cfg.get("heartbeat", {})
-    if not isinstance(raw_hb_cfg, Mapping):
-        enabled = bool(raw_hb_cfg)
-        hb_cfg: Mapping[str, Any] = {}
-    else:
-        hb_cfg = raw_hb_cfg
-        enabled = bool(hb_cfg.get("enabled", True))
-
-    if not enabled:
-        logger.info("Heartbeat auto publish is disabled by config.")
-        return
-
-    interval_ms = int(hb_cfg.get("interval_ms", 5000))
-    jitter_ms = int(hb_cfg.get("jitter_ms", 500))
-    status = str(hb_cfg.get("status", "ONLINE"))
-    mode = str(hb_cfg.get("mode", "AUTO"))
-
-    if interval_ms <= 0:
-        raise ValueError("runtime.heartbeat.interval_ms must be > 0")
-    if jitter_ms < 0:
-        raise ValueError("runtime.heartbeat.jitter_ms must be >= 0")
-
-    session.start_heartbeats(
-        provider=lambda: {
-            "timestamp": int(time.time() * 1000),
-            "status": status,
-            "mode": mode,
-        },
-        interval_ms=interval_ms,
-        jitter_ms=jitter_ms,
-    )
-    logger.info(
-        "Heartbeat auto publish started (interval_ms=%s, jitter_ms=%s, status=%s, mode=%s).",
-        interval_ms,
-        jitter_ms,
-        status,
-        mode,
     )
 
 
@@ -399,23 +416,219 @@ def _fmt_transforms(transforms: Any) -> str:
     return "  [" + ", ".join(parts) + "]"
 
 
+def _forwarder_enabled(args) -> bool:
+    return bool(args.bundle) and bool(args.forwarder_config)
+
+
+def build_forwarder_config(args):
+    config = parse_forwarder_config(args.forwarder_config)
+    if config.forwarder_session is None:
+        raise ValueError(
+            "forwarder_config must declare forwarder_session"
+        )
+    return config
+
+
+def start_inprocess_forwarder(*, config, main_session, bundle, connect=None,
+                              private_key_password=None,
+                              name='inprocess-forwarder'):
+    sessions = open_forwarder_sessions(
+        config, main_session=main_session, bundle=bundle, connect=connect,
+        private_key_password=private_key_password,
+    )
+    try:
+        return start_forwarder(config, sessions, name=name)
+    except Exception:
+        # start_forwarder 失败（如 proto 类名错误）时清理已打开的
+        # forwarder_session（main 由调用方管理，不在此关闭），避免云连接泄漏
+        logger.error(
+            "in-process forwarder start failed, cleaning up sessions"
+        )
+        for sname, fs_session in sessions.items():
+            if sname == "main":
+                continue
+            try:
+                fs_session.close()
+            except Exception:
+                logger.debug(
+                    "session %s close failed (ignored)", sname
+                )
+        raise
+
+
+def _log_keyboard_control(runtime_cfg: Any) -> None:
+    """记录 runtime.keyboard_control.enabled 状态（存在且开启时提示）。"""
+    if not isinstance(runtime_cfg, Mapping):
+        return
+    keyboard_cfg = runtime_cfg.get("keyboard_control", {})
+    if isinstance(keyboard_cfg, Mapping) and bool(keyboard_cfg.get("enabled", False)):
+        logger.info("Runtime keyboard control is enabled by robot config.")
+
+
+def _setup_forwarder(args: argparse.Namespace, session: Any, forwarder_active: bool,
+                     private_key_password: Optional[Union[str, bytes]] = None):
+    """按需启动 in-process forwarder，返回 (inprocess_forwarder, forwarder_config)。"""
+    if not forwarder_active:
+        return None, None
+    forwarder_config = build_forwarder_config(args)
+    inprocess_forwarder = start_inprocess_forwarder(
+        config=forwarder_config,
+        main_session=session,
+        bundle=args.bundle,
+        private_key_password=private_key_password,
+    )
+    logger.info(
+        "In-process forwarder started (main -> forwarder_session, %d routes)",
+        len(forwarder_config.routes),
+    )
+    return inprocess_forwarder, forwarder_config
+
+
+def _build_recorder(args: argparse.Namespace) -> Optional[ObservationRecorder]:
+    """按 --record 构建观察记录器；未指定时返回 None。"""
+    if not args.record:
+        return None
+    recorder = ObservationRecorder(args.record)
+    logger.info("Recording observations to %s", args.record)
+    return recorder
+
+
+def _start_topic_runtime(topics_cfg: Any, session: Any, robot_client: Any):
+    """按 hardware.topics 配置启动 TopicRuntime（无配置则不启动）。"""
+    if not topics_cfg:
+        return None
+    return start_topic_runtime(
+        topics_cfg,
+        session,
+        callback_owner=robot_client.hardware_adapter,
+        process_name="cloudroboclient",
+    )
+
+
+def _start_camera_streaming(
+    session: Any, robot_client: Any, camera_streaming_cfg: Any
+) -> bool:
+    """按 camera_streaming 配置段启动 LiveKit 相机推流。
+
+    依赖硬件适配器实现 ICameraFrameSource（共享帧槽），未实现则推流不可用。
+    返回是否已启动推流服务（用于关闭流程清理）。
+    """
+    if camera_streaming_cfg is None:
+        return False
+    if not (isinstance(camera_streaming_cfg, Mapping) and bool(
+        camera_streaming_cfg.get("enabled", True)
+    )):
+        logger.info("camera_streaming configured but disabled; skipped")
+        return False
+    try:
+        session.start_camera_streaming(
+            adapter=robot_client.hardware_adapter,
+            camera_streaming_cfg=camera_streaming_cfg,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to start camera streaming service; continuing without it"
+        )
+        return False
+
+
+def _run_main_loop(robot_client: Any, stop_event: threading.Event, args: Any) -> None:
+    """按 duration 等待主循环结束（有限时长或直至 running 停止）。"""
+    if args.duration and args.duration > 0:
+        stop_event.wait(timeout=float(args.duration))
+        return
+    while robot_client.running and not stop_event.wait(timeout=1.0):
+        pass
+
+
+def _stop_topic_runtime(topic_runtime: Any) -> None:
+    """停止 TopicRuntime（未启动则忽略）。"""
+    if topic_runtime is None:
+        return
+    try:
+        topic_runtime.stop()
+    except Exception:
+        logger.exception("topic runtime stop failed")
+
+
+def _stop_camera_streaming(session: Any, camera_streaming_active: bool) -> None:
+    """停止相机推流服务（未启动则忽略）。"""
+    if not camera_streaming_active:
+        return
+    try:
+        session.stop_camera_streaming()
+    except Exception:
+        logger.exception("camera streaming cleanup failed")
+
+
+def _close_forwarder_sessions(inprocess_forwarder: Any) -> None:
+    """关闭 in-process forwarder 的全部子会话（未启动则忽略）。"""
+    if inprocess_forwarder is None:
+        return
+    try:
+        for fs_session in inprocess_forwarder._sessions.values():
+            fs_session.close()
+    except Exception:
+        logger.exception("forwarder session close failed")
+
+
+def _shutdown(
+    topic_runtime: Any,
+    robot_client: Any,
+    session: Any,
+    camera_streaming_active: bool,
+    inprocess_forwarder: Any,
+) -> None:
+    """停机清理：停止 topic runtime、机器人、相机推流与各会话。"""
+    _stop_topic_runtime(topic_runtime)
+    robot_client.stop()
+    try:
+        robot_client.hardware_adapter.disconnect()
+    finally:
+        # 相机推流清理（停止取帧/断开 Room/停止续签；不释放相机设备——
+        # 设备已在 adapter.disconnect() 释放）
+        _stop_camera_streaming(session, camera_streaming_active)
+        # EventManager.close 丢弃未发缓存并打汇总日志（先于 session.close）
+        event_manager.close()
+        session.close()
+        _close_forwarder_sessions(inprocess_forwarder)
+
+
 def run_edge_client(args: argparse.Namespace) -> None:
-    robot_config = load_yaml(args.robot_config)
+    # 解析配置文件路径：当前目录找不到时回退到 cloudrobo_r2c 包安装目录下查找
+    args.robot_config = resolve_config_path(args.robot_config)
+    args.bundle = resolve_config_path(args.bundle)
+    args.client_config = resolve_config_path(args.client_config)
+    args.forwarder_config = resolve_config_path(args.forwarder_config)
+
+    robot_config = dict(load_yaml(args.robot_config))
     robot_config["_config_dir"] = os.path.dirname(os.path.abspath(args.robot_config))
-    runtime_cfg = robot_config.get("runtime", {})
-    if isinstance(runtime_cfg, Mapping):
-        keyboard_cfg = runtime_cfg.get("keyboard_control", {})
-        if isinstance(keyboard_cfg, Mapping) and bool(
-            keyboard_cfg.get("enabled", False)
-        ):
-            logger.info("Runtime keyboard control is enabled by robot config.")
-    session = build_session(args)
+    _log_keyboard_control(robot_config.get("runtime", {}))
+
+    forwarder_active = _forwarder_enabled(args)
+    session = build_session(args, forwarder_active=forwarder_active)
+    forwarder_password = None
+    if forwarder_active and isinstance(session, tuple):
+        session, forwarder_password = session
+    try:
+        inprocess_forwarder, _ = _setup_forwarder(
+            args, session, forwarder_active,
+            private_key_password=forwarder_password,
+        )
+    except Exception:
+        # forwarder 启动失败时关闭已建立的 session，避免泄漏
+        logger.error("forwarder setup failed, closing session")
+        try:
+            session.close()
+        except Exception:
+            logger.debug("session close failed (ignored)")
+        raise
+
+    event_manager.configure(session)
     _maybe_start_heartbeats(session=session, robot_config=robot_config)
 
-    recorder = None
-    if args.record:
-        recorder = ObservationRecorder(args.record)
-        logger.info("Recording observations to %s", args.record)
+    recorder = _build_recorder(args)
 
     robot_client = build_sync_robot_client(
         robot_config=robot_config,
@@ -424,7 +637,6 @@ def run_edge_client(args: argparse.Namespace) -> None:
         translator_class=args.translator_class,
         recorder=recorder,
     )
-
     _log_translator_summary(robot_client.translator, logger)
 
     logger.info(
@@ -434,35 +646,34 @@ def run_edge_client(args: argparse.Namespace) -> None:
     )
 
     stop_event = threading.Event()
+    topics_cfg = (robot_config.get("hardware") or {}).get("topics") or {}
+    # 相机推流配置（可选能力；未配置 camera_streaming 段则跳过启动）
+    camera_streaming_cfg = robot_config.get("camera_streaming") or None
+    topic_runtime = None
+    camera_streaming_active=None
     try:
         robot_client.hardware_adapter.connect()
+        # adapter.connect() 先初始化模块单例（状态缓存/采集器/告警等），
+        # TopicRuntime 发布线程才能拿到有效 collector（robot_app 时代
+        # 同序约束）；零配置零启动——官方既有机型路径不受影响
+        topic_runtime = _start_topic_runtime(topics_cfg, session, robot_client)
+        camera_streaming_active = _start_camera_streaming(
+            session, robot_client, camera_streaming_cfg
+        )
         robot_client.start()
-
-        if args.duration and args.duration > 0:
-            stop_event.wait(timeout=float(args.duration))
-        else:
-            while robot_client.running and not stop_event.wait(timeout=1.0):
-                pass
+        _run_main_loop(robot_client, stop_event, args)
     finally:
-        robot_client.stop()
-        try:
-            robot_client.hardware_adapter.disconnect()
-        finally:
-            session.close()
+        _shutdown(
+            topic_runtime=topic_runtime,
+            robot_client=robot_client,
+            session=session,
+            camera_streaming_active=camera_streaming_active,
+            inprocess_forwarder=inprocess_forwarder,
+        )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
-    # Resolve config paths against the config shipped inside the installed
-    # package, while still honoring explicit paths / source-checkout relative
-    # paths (see cloudrobo_r2c.common.config_path).
-    from cloudrobo_r2c.common.config_path import resolve_config_path
-
-    if args.client_config:
-        args.client_config = resolve_config_path(args.client_config)
-    if args.robot_config:
-        args.robot_config = resolve_config_path(args.robot_config)
-
     log_level = getattr(logging, str(args.log_level).upper())
     log_format = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 
@@ -476,21 +687,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             )
         )
 
-    # The parent `cloudrobo` group already calls logging.basicConfig() when it
-    # starts, which installs handlers on the root logger. A subsequent
-    # basicConfig() is therefore a documented no-op, so --log-level would have
-    # no effect. Explicitly (re)configure the root logger instead.
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-
-    formatter = logging.Formatter(log_format)
-    for handler in handlers:
-        handler.setFormatter(formatter)
-        handler.setLevel(log_level)
-        root_logger.addHandler(handler)
+    logging.basicConfig(
+        level=log_level,
+        format=log_format,
+        handlers=handlers,
+    )
 
     try:
         run_edge_client(args)

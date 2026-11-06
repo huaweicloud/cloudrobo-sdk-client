@@ -18,7 +18,7 @@ class H264Decoder:
 
     def __init__(self):
         """Initialize H264 decoder"""
-        self.codec = av.CodecContext.create('h264', 'r')
+        self.codec = av.CodecContext.create("h264", "r")
 
     def decode_and_split(self, processed_data):
         """
@@ -40,11 +40,13 @@ class H264Decoder:
             images_data = processed_data["images"]
 
             if not isinstance(images_data, dict) or "h264_data" not in images_data:
-                logger.warning("Input data is not encoded, returning original data directly")
+                logger.warning(
+                    "Input data is not encoded, returning original data directly"
+                )
                 compression_info = {
-                    'encoded_size': 0,
-                    'decoded_size': 0,
-                    'compression_ratio': 0
+                    "encoded_size": 0,
+                    "decoded_size": 0,
+                    "compression_ratio": 0,
                 }
                 return processed_data, compression_info
 
@@ -52,16 +54,20 @@ class H264Decoder:
             metadata = images_data["metadata"]
 
             # Validate metadata completeness
-            required_fields = ['image_keys', 'original_shapes', 'combined_shape', 'frame_count']
+            required_fields = [
+                "image_keys",
+                "original_shapes",
+                "combined_shape",
+                "frame_count",
+            ]
             for field in required_fields:
                 if field not in metadata:
                     raise Exception(f"Metadata missing required field: {field}")
 
-            image_keys = metadata['image_keys']
-            original_shapes = metadata['original_shapes']
-            combined_shape = metadata['combined_shape']
-            merge_direction = metadata.get('merge_direction', 'horizontal')
-            frame_count = metadata['frame_count']
+            image_keys = metadata["image_keys"]
+            original_shapes = metadata["original_shapes"]
+            merge_direction = metadata.get("merge_direction", "horizontal")
+            frame_count = metadata["frame_count"]
 
             # Calculate pre-encoding data size (total size of raw image data)
             original_size = self._calculate_original_size(original_shapes)
@@ -79,7 +85,9 @@ class H264Decoder:
             )
 
             # Rebuild image dictionary (restore by image_keys)
-            restored_images = self._rebuild_image_dict(image_keys, split_images, original_shapes)
+            restored_images = self._rebuild_image_dict(
+                image_keys, split_images, original_shapes
+            )
 
             # Update images in result_data to restored image dictionary
             result_data["images"] = restored_images
@@ -88,12 +96,12 @@ class H264Decoder:
             compression_ratio = encoded_size / original_size if original_size > 0 else 0
 
             compression_info = {
-                'original_size': original_size,      # Raw data size before encoding
-                'encoded_size': encoded_size,        # Data size after H.264 encoding
-                'decoded_size': decoded_size,        # Image data size after decoding
-                'compression_ratio': compression_ratio,  # Compression ratio
-                'frame_count': frame_count,          # Number of images
-                'original_shapes': original_shapes   # Original image shapes
+                "original_size": original_size,  # Raw data size before encoding
+                "encoded_size": encoded_size,  # Data size after H.264 encoding
+                "decoded_size": decoded_size,  # Image data size after decoding
+                "compression_ratio": compression_ratio,  # Compression ratio
+                "frame_count": frame_count,  # Number of images
+                "original_shapes": original_shapes,  # Original image shapes
             }
 
             return result_data, compression_info
@@ -130,22 +138,24 @@ class H264Decoder:
 
             # Get the first frame (assuming there is only one frame)
             decoded_frame = frames[0]
-            combined_image = decoded_frame.to_ndarray(format='bgr24')
+            combined_image = decoded_frame.to_ndarray(format="bgr24")
 
             return combined_image
 
         except Exception as e:
             raise Exception(f"H.264 decoding failed: {e}")
 
-    def _split_combined_image(self, combined_image, frame_count, original_shapes, merge_direction):
+    def _split_combined_image(
+        self, combined_image, frame_count, original_shapes, merge_direction
+    ):
         """Split merged image"""
         try:
             if frame_count == 1:
                 return [combined_image]
 
-            if merge_direction == 'horizontal':
+            if merge_direction == "horizontal":
                 return self._split_horizontal(combined_image, original_shapes)
-            elif merge_direction == 'vertical':
+            elif merge_direction == "vertical":
                 return self._split_vertical(combined_image, original_shapes)
             else:
                 raise Exception(f"Unsupported merge direction: {merge_direction}")
@@ -174,7 +184,9 @@ class H264Decoder:
 
             # Adjust if height does not match
             if sub_image.shape[0] != original_height:
-                sub_image = self._resize_image(sub_image, (original_height, sub_image.shape[1]))
+                sub_image = self._resize_image(
+                    sub_image, (original_height, sub_image.shape[1])
+                )
 
             images.append(sub_image)
             current_x = next_x
@@ -206,7 +218,9 @@ class H264Decoder:
 
             # Adjust if width does not match
             if sub_image.shape[1] != original_width:
-                sub_image = self._resize_image(sub_image, (sub_image.shape[0], original_width))
+                sub_image = self._resize_image(
+                    sub_image, (sub_image.shape[0], original_width)
+                )
 
             images.append(sub_image)
             current_y = next_y
@@ -225,14 +239,18 @@ class H264Decoder:
             return image
 
         if cv2 is not None:
-            return cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
+            return cv2.resize(
+                image, (target_width, target_height), interpolation=cv2.INTER_LINEAR
+            )
 
         # Simple numpy implementation (nearest-neighbor interpolation)
         logger.warning("OpenCV not found, using a simple resize method")
         height_ratio = target_height / image.shape[0]
         width_ratio = target_width / image.shape[1]
 
-        resized = np.zeros((target_height, target_width, image.shape[2]), dtype=image.dtype)
+        resized = np.zeros(
+            (target_height, target_width, image.shape[2]), dtype=image.dtype
+        )
 
         for i in range(target_height):
             for j in range(target_width):
@@ -251,10 +269,14 @@ class H264Decoder:
 
         restored_images = {}
 
-        for i, (key, image, original_shape) in enumerate(zip(image_keys, split_images, original_shapes)):
+        for i, (key, image, original_shape) in enumerate(
+            zip(image_keys, split_images, original_shapes)
+        ):
             # Final shape validation
             if image.shape != original_shape:
-                image = self._resize_image(image, (original_shape[0], original_shape[1]))
+                image = self._resize_image(
+                    image, (original_shape[0], original_shape[1])
+                )
 
             restored_images[key] = image
 
@@ -263,7 +285,7 @@ class H264Decoder:
     def close(self):
         """Release resources"""
         if self.codec is None:
-            return 
+            return
         try:
             self.codec.close()
         finally:

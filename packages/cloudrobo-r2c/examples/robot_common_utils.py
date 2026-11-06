@@ -8,14 +8,11 @@ import yaml
 from ros_adapter.config import R2CClientConfig
 
 # 配置日志, 加入代码所在行
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s  - %(lineno)d - %(message)s"
-)
 logger = logging.getLogger(__file__)
 
 
 ROBOT_R2C_MAPPING_FILE = "./examples/configs/robot_to_r2c_mapping.yaml"
+ROBOT_METADATA_PATH = "/data/workspace/eail/Assets/robots"
 
 
 def get_robot_type(path: str) -> str:
@@ -100,3 +97,6 @@ def load_mapping_file(file: str) -> Dict[str, Any]:
     with open(file, "r") as f:
         robot_r2c_mapping_info = yaml.safe_load(f)
     return robot_r2c_mapping_info
+
+
+ROBOT_TYPE = get_robot_type(ROBOT_METADATA_PATH)

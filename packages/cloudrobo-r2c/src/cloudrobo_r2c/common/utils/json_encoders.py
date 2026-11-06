@@ -10,5 +10,5 @@ class BytesEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, bytes):
             # Convert to ASCII string for JSON serialization
-            return base64.b64encode(obj).decode('ascii')
+            return base64.b64encode(obj).decode("ascii")
         return super().default(obj)

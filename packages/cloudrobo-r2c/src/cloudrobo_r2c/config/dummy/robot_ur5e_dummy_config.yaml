@@ -5,18 +5,18 @@
 #       便于本地快速联调 cloudroboclient ↔ policy server 的完整链路。
 #
 # 用法:
-#   python -m r2c_sdk.cloudroboclient \
+#   python -m cloudrobo_r2c.cloudroboclient \
 #     --client-config config/client_config.yaml \
-#     --robot-config config/dummy/robot_ur5e_dummy_config.yaml
+#     --robot-config config/robot_ur5e_dummy_config.yaml
 #
 # 联调 (配合 policy server):
-#   终端 1: python -m r2c_sdk.inference.r2c_lerobot_policy_server \
+#   终端 1: python -m cloudrobo_r2c.inference.r2c_lerobot_policy_server \
 #             --client-config config/client_config.yaml \
 #             --cloud-config config/cloud_ur5e_act.yaml \
 #             --policy-type act --device cpu
-#   终端 2: python -m r2c_sdk.cloudroboclient \
+#   终端 2: python -m cloudrobo_r2c.cloudroboclient \
 #             --client-config config/client_config.yaml \
-#             --robot-config config/dummy/robot_ur5e_dummy_config.yaml
+#             --robot-config config/robot_ur5e_dummy_config.yaml
 # =============================================================================
 
 schema_version: "v2.1"

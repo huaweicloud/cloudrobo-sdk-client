@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import math
+import array
 from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, Callable, Dict, Mapping, Sequence
-import array
-import base64
+from collections.abc import Iterable
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -51,10 +52,50 @@ def _encode_ndarray_bytes(value: Any) -> bytes:
         must already know the expected layout (or receive it out-of-band) in
         order to reconstruct the array via ``np.frombuffer(buf, dtype=…)``.
     """
-
     if not isinstance(value, np.ndarray):
         raise TypeError("ndarray_to_bytes expects a numpy.ndarray input")
     return value.tobytes()
+
+
+def _decode_bytes_to_ndarray(value: Any, config: Any) -> "np.ndarray":
+    """Reconstruct a numpy ndarray from raw bytes.
+
+    Config must be a ``dict`` with at least a ``"dtype"`` key (e.g.
+    ``"float32"``, ``"int32"``).  An optional ``"shape"`` key reshapes
+    the output; when omitted the result is a flat 1-D array.
+    """
+
+    if not isinstance(value, (bytes, bytearray)):
+        raise TypeError("bytes_to_ndarray expects bytes or bytearray input")
+    if not isinstance(config, Mapping):
+        raise ValueError(
+            "bytes_to_ndarray requires a config mapping with at least 'dtype'"
+        )
+    dtype_str = config.get("dtype")
+    if not isinstance(dtype_str, str):
+        raise ValueError(
+            "bytes_to_ndarray config: 'dtype' must be a string, e.g. 'float32'"
+        )
+    try:
+        dtype = np.dtype(dtype_str)
+    except TypeError as exc:
+        raise ValueError(
+            f"bytes_to_ndarray config: invalid dtype {dtype_str!r}: {exc}"
+        ) from exc
+
+    arr = np.frombuffer(value, dtype=dtype)
+
+    shape = config.get("shape")
+    if shape is not None:
+        try:
+            arr = arr.reshape(shape)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"bytes_to_ndarray config: cannot reshape {arr.shape} "
+                f"array to shape={shape!r}: {exc}"
+            ) from exc
+
+    return arr
 
 
 def _quality_from_config(config: Any, default: int) -> int:
@@ -264,14 +305,22 @@ def _list_to_ros_move_request(value: Any, config: Any = None) -> Any:
 # Keys that are known to be joint-data arrays (parallel to "name"/"names").
 # Used to emit a clear warning when a known joint-data field has a
 # mismatched array length instead of silently passing through.
-_JOINT_DATA_KEYS: frozenset[str] = frozenset({
-    "name", "names",
-    "position", "velocity", "effort", "acceleration",
-    "temperature", "motor_current", "status",
-})
+_JOINT_DATA_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "names",
+        "position",
+        "velocity",
+        "effort",
+        "acceleration",
+        "temperature",
+        "motor_current",
+        "status",
+    }
+)
 
 
-def _select_joints_by_name(value: Any, config: Any = None) -> Any:
+def _select_joints_by_name(value, config=None):
     """Filter and reorder joint-state arrays by name.
 
     *value* must be a ``Mapping`` containing at least a ``"name"`` or
@@ -279,34 +328,63 @@ def _select_joints_by_name(value: Any, config: Any = None) -> Any:
     list-valued keys that have the same length as the names list are
     filtered/reordered in the same way.
 
-    *config* must be a ``Mapping`` with a ``"names"`` key — the
+    *config* must be a ``Mapping`` with a ``"names"`` key -- the
     ordered list of joint names to keep.
 
-    When a requested joint is missing from *value*, a warning is
-    logged and ``0.0`` is substituted for numeric fields.
+    When a requested joint is missing from *value*, the function
+    raises a ``ValueError`` (strict validation) listing the missing
+    joint names.
     """
     if not isinstance(value, Mapping):
         return value
-
     # Guard against None or non-Mapping config (Bug fix: was crashing).
     if not isinstance(config, Mapping):
-        logger.warning(
-            "select_joints_by_name: config is not a mapping (%s); "
-            "passing through unchanged",
-            type(config).__name__ if config is not None else "NoneType",
-        )
+        _warn_select_config_not_mapping(config)
         return value
 
-    target_names: list[str] = [
-        str(n).strip() for n in config.get("names", []) if str(n).strip()
-    ]
+    target_names = _select_target_names(config)
     if not target_names:
         return value
 
     # Resolve the source names list: prefer "name", then "names".
-    # Validate that the resolved value is actually a list — a string or
-    # other non-list truthy value would silently break the length-based
-    # heuristic below (Bug fix).
+    raw_names = _select_raw_names(value)
+    if raw_names is None:
+        return value
+
+    source_names = [str(n) for n in raw_names]
+    if not source_names:
+        logger.warning(
+            "select_joints_by_name: input 'name'/'names' list is empty; "
+            "passing through unchanged"
+        )
+        return value
+
+    # Build index map: target_name -> source_index (or -1 if missing)
+    indices, missing = _select_build_index_map(source_names, target_names)
+    if missing:
+        raise _select_missing_joints_error(target_names, source_names, missing)
+
+    return _select_filter_fields(value, source_names, target_names, indices)
+
+
+def _warn_select_config_not_mapping(config):
+    """Guard log: non-Mapping select_joints_by_name config. (Bug fix.)"""
+    logger.warning(
+        "select_joints_by_name: config is not a mapping (%s); "
+        "passing through unchanged",
+        type(config).__name__ if config is not None else "NoneType",
+    )
+
+
+def _select_target_names(config):
+    """Return the configured ordered joint names to keep (stripped/truthy)."""
+    return [
+        str(n).strip() for n in config.get("names", []) if str(n).strip()
+    ]
+
+
+def _select_raw_names(value):
+    """Return the source names list, or None when input has none list-typed."""
     raw_names = value.get("name")
     if not isinstance(raw_names, list):
         raw_names = value.get("names")
@@ -316,56 +394,50 @@ def _select_joints_by_name(value: Any, config: Any = None) -> Any:
             "field (got %s); passing through unchanged",
             type(raw_names).__name__,
         )
-        return value
+        return None
+    return raw_names
 
-    source_names: list[str] = [str(n) for n in raw_names]
 
-    if not source_names:
-        logger.warning(
-            "select_joints_by_name: input 'name'/'names' list is empty; "
-            "passing through unchanged"
-        )
-        return value
-
-    # Build index map: target_name → source_index (or -1 if missing)
-    name_to_source_idx: dict[str, int] = {
+def _select_build_index_map(source_names, target_names):
+    """Map target names to source indices; missing targets get -1, listed."""
+    name_to_source_idx = {
         name: idx for idx, name in enumerate(source_names)
     }
-    indices: list[int] = []
-    missing: list[str] = []
+    indices = []
+    missing = []
     for target in target_names:
         idx = name_to_source_idx.get(target, -1)
         if idx == -1:
             missing.append(target)
         indices.append(idx)
+    return indices, missing
 
-    if missing:
-        raise ValueError(
-            "select_joints_by_name: the following joints were not found "
-            "in the source message:\n"
-            f"  requested: {target_names}\n"
-            f"  available: {source_names}\n"
-            f"  missing:   {missing}\n"
-            "Please check your subscription config — either fix the "
-            "'names' list in select_joints_by_name, or ensure the ROS2 "
-            "topic publishes the expected joint names."
-        )
 
-    result: dict[str, Any] = {}
+def _select_missing_joints_error(target_names, source_names, missing):
+    """Build the ValueError listing joints absent from the source message."""
+    return ValueError(
+        "select_joints_by_name: the following joints were not found "
+        "in the source message:\n"
+        f"  requested: {target_names}\n"
+        f"  available: {source_names}\n"
+        f"  missing:   {missing}\n"
+        "Please check your subscription config -- either fix the "
+        "'names' list in select_joints_by_name, or ensure the ROS2 "
+        "topic publishes the expected joint names."
+    )
+
+
+def _select_filter_fields(value, source_names, target_names, indices):
+    """Filter/reorder every joint-array field parallel to source_names."""
+    result = {}
     for key, val in value.items():
         if not isinstance(val, (list, array.array)):
             result[key] = val
             continue
 
         if len(val) != len(source_names):
-            # Length mismatch — this list is NOT a joint-array parallel
-            # to source_names.  Most often these are metadata fields
-            # (e.g. "header" sub-objects).
-            #
-            # However, if *key* is a known joint-data field we emit a
-            # warning because the input may be malformed (the ROS2 spec
-            # requires parallel arrays).  This was a silent failure in
-            # the original code.
+            # Length mismatch -- this list is NOT a joint-array parallel
+            # to source_names.  Most often metadata fields (e.g. header).
             if key in _JOINT_DATA_KEYS:
                 logger.warning(
                     "select_joints_by_name: joint-data field %r has "
@@ -376,20 +448,25 @@ def _select_joints_by_name(value: Any, config: Any = None) -> Any:
             result[key] = val
             continue
 
-        is_name_field = key in ("name", "names")
-        filtered: list[Any] = []
-        for i, idx in enumerate(indices):
-            if idx >= 0:
-                filtered.append(val[idx])
-            elif is_name_field:  # pragma: no cover
-                filtered.append(target_names[i])
-            else:  # pragma: no cover
-                filtered.append(0.0)
-        result[key] = filtered
-
+        result[key] = _select_filter_one_field(
+            val, source_names, target_names, indices, key
+        )
     return result
 
 
+def _select_filter_one_field(val, source_names, target_names, indices, key):
+    """Reorder one joint-array field according to the target index map."""
+    is_name_field = key in ("name", "names")
+    filtered = []
+    for i, idx in enumerate(indices):
+        if idx >= 0:
+            filtered.append(val[idx])
+        elif is_name_field:
+            # For the name field, use the configured target name
+            filtered.append(target_names[i])
+        else:
+            filtered.append(0.0)
+    return filtered
 def _scalar_to_step_motor_gripper(value: Any, config: Any = None) -> Any:
     try:
         from step_motor.msg import Motor
@@ -475,6 +552,130 @@ def _slice_sequence(value: Any, config: Any = None) -> Any:
     return list(value[start:end])
 
 
+def _is_ndarray_like(value: Any) -> bool:
+    """Duck-type check for numpy ndarray / array-like (no hard numpy import)."""
+    return hasattr(value, "ndim") and hasattr(value, "shape")
+
+
+def _normalize_index_part(item: Any) -> Any:
+    """Normalize a single per-dimension index component.
+
+    ``":"`` (optional surrounding whitespace) selects the whole dimension
+    (like numpy ``:``) and is represented internally as ``None``.  An ``int``
+    is kept.  Any other value raises a ``ValueError``.
+    """
+    if isinstance(item, str) and item.strip() == ":":
+        return None
+    if item is None or isinstance(item, bool):
+        raise ValueError(
+            f"invalid index component {item!r}: expected int, or ':'"
+        )
+    if isinstance(item, int):
+        if item < 0:
+            raise ValueError(f"index component must be >= 0, got {item!r}")
+        return item
+    raise ValueError(
+        f"invalid index component {item!r}: expected int, or ':'"
+    )
+
+
+def normalize_index(index: Any) -> Any:
+    """Validate & normalize an index spec.
+
+    Returns an ``int`` (single-dimension indexing) or a list of
+    ``int``/``None`` components (per-dimension indexing), where a ``":"``
+    component selects the whole dimension (represented internally as
+    ``None``, i.e. numpy ``:``).  A top-level ``":"`` means "select all
+    dimensions" and returns ``[]``.
+    """
+    if isinstance(index, bool):
+        raise ValueError("index must be an int or a list of int/':'")
+    if isinstance(index, str):
+        if index.strip() == ":":
+            return []
+        raise ValueError(f"index must be an int or a list, got string {index!r}")
+    if isinstance(index, (list, tuple)):
+        return [_normalize_index_part(item) for item in index]
+    if isinstance(index, int):
+        if index < 0:
+            raise ValueError(f"index must be >= 0, got {index!r}")
+        return index
+    raise ValueError(
+        f"index must be an int or a list, got {type(index).__name__!r}"
+    )
+
+
+def _index_nested_list(value: Any, parts: list) -> Any:
+    """Apply per-dimension indexing to a nested list/tuple.
+
+    ``parts`` is a list of ``int`` (pick that element) or ``None`` (select the
+    whole dimension, recursing into each element when more parts remain).
+    """
+    if not parts:
+        return value
+    head, rest = parts[0], parts[1:]
+    if head is None:
+        if not rest:
+            return value
+        result = []
+        for sub in value:
+            if not isinstance(sub, (list, tuple)):
+                raise TypeError(
+                    f"Cannot index non-iterable element {sub!r} with parts {rest!r} "
+                    f"in _index_nested_list"
+                )
+            result.append(_index_nested_list(sub, rest))
+        return result
+    selected = value[head]
+    if not rest:
+        return selected
+    return _index_nested_list(selected, rest)
+
+
+def _index_spec(index: Any) -> Any:
+    """Convert an index spec for consumption (int or list<int|None>).
+
+    Unlike :func:`normalize_index` this is *lenient*: a literal ``None``
+    component (the internal full-select spec produced by the config layer)
+    and ``":"`` are both mapped to ``None``.  Other strings raise.
+    """
+    if not isinstance(index, (list, tuple)):
+        return index
+    out = []
+    for p in index:
+        if p is None or (isinstance(p, str) and p.strip() == ":"):
+            out.append(None)
+        elif isinstance(p, str):
+            raise ValueError(
+                f"invalid index component {p!r}: expected int, or ':'"
+            )
+        else:
+            out.append(p)
+    return out
+
+
+def index_value(value: Any, index: Any) -> Any:
+    """Select element(s) from ``value`` by ``index``.
+
+    - ``index`` int → ``value[index]`` (single dimension, backward compatible).
+    - ``index`` list/tuple → per-dimension selection; each component is an int
+      or a ``":"`` (or internal ``None``) meaning "select the whole dimension"
+      (like numpy ``:``).  e.g. ``[":", 0]`` on a 2-D value is equivalent to
+      ``value[:, 0]`` on a numpy array.
+
+    Supports ``list``/``tuple`` and ``numpy.ndarray`` input.
+    """
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("index expects list/tuple/ndarray-like input")
+    spec = _index_spec(index)
+    if isinstance(spec, int):
+        return value[spec]
+    if _is_ndarray_like(value):
+        numpy_spec = tuple(slice(None) if p is None else p for p in spec)
+        return value[numpy_spec]
+    return _index_nested_list(value, spec)
+
+
 def _index_sequence(value: Any, config: Any = None) -> Any:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise TypeError("index expects list/tuple-like input")
@@ -539,7 +740,9 @@ class ToListTransformer(IValueTransformer):
             return value
         if isinstance(value, (str, bytes, bytearray)):
             raise TypeError("to_list does not accept str/bytes input")
-        return list(value)
+        if isinstance(value, Iterable):
+            return list(value)
+        return [value]
 
 
 @dataclass(frozen=True)
@@ -593,6 +796,21 @@ class ArrayToListTransformer(IValueTransformer):
         if isinstance(value, (list, tuple)):
             return list(value)
         raise TypeError("array_to_list expects an array-like input with tolist()")
+
+
+@dataclass(frozen=True)
+class ListWrapperTransformer(IValueTransformer):
+    """Wrap the source value itself into a new list.
+
+    Unlike :class:`ToListTransformer` (which flattens iterables / passes
+    existing lists through untouched), this transformer always wraps the
+    whole input value as a single element: ``[value]``.  Useful when a
+    target slot expects a list whose single element is the (possibly
+    already-list) source value.
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        return [value]
 
 
 @dataclass(frozen=True)
@@ -767,14 +985,15 @@ class ScalarToStepMotorGripperDebounceTransformer(IValueTransformer):
 
     @staticmethod
     def validate_config(config: Any) -> None:
-        if config is not None and not isinstance(config, dict):
+        if config is None:
+            return
+        if not isinstance(config, dict):
             raise ValueError(
                 "scalar_to_step_motor_gripper_debounce config must be a mapping"
             )
-        cfg = config or {}
-        open_threshold = float(cfg.get("open_threshold", 80.0))
-        close_threshold = float(cfg.get("close_threshold", 20.0))
-        consecutive_required = int(cfg.get("consecutive_required", 10))
+        open_threshold = float(config.get("open_threshold", 80.0))
+        close_threshold = float(config.get("close_threshold", 20.0))
+        consecutive_required = int(config.get("consecutive_required", 10))
         if open_threshold < close_threshold:
             raise ValueError("open_threshold must be >= close_threshold")
         if consecutive_required <= 0:
@@ -803,6 +1022,23 @@ class NdarrayToJpegTransformer(IValueTransformer):
     @staticmethod
     def validate_config(config: Any) -> None:
         _validate_image_codec_config(config, name="ndarray_to_jpeg")
+
+
+@dataclass(frozen=True)
+class JpegPassthroughTransformer(IValueTransformer):
+    """已编码 jpeg 字节直传（观测原始字节上传，不解码再压缩）。
+
+    bytes 原样返回（bytearray 归一为 bytes）；ndarray 等其它类型报错
+    （应改用 ndarray_to_jpeg 编码）。
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        raise TypeError(
+            "jpeg_passthrough expects pre-encoded jpeg bytes input, "
+            f"got {type(value).__name__} (use ndarray_to_jpeg for ndarray)"
+        )
 
 
 @dataclass(frozen=True)
@@ -903,6 +1139,68 @@ class NdarrayToBytesTransformer(IValueTransformer):
 
     def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
         return _encode_ndarray_bytes(value)
+
+
+@dataclass(frozen=True)
+class BytesToNdarrayTransformer(IValueTransformer):
+    """Reconstruct a numpy ndarray from raw bytes via :func:`np.frombuffer`.
+
+    Config (required) must be a mapping with:
+
+    * ``dtype`` (``str``) — numpy dtype name, e.g. ``"float32"``, ``"int32"``
+    * ``shape`` (``tuple``, optional) — reshape the output; flat 1-D when omitted
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        return _decode_bytes_to_ndarray(value, config)
+
+    @staticmethod
+    def validate_config(config: Any) -> None:
+        if config is None:
+            raise ValueError(
+                "bytes_to_ndarray requires a config mapping with at least "
+                "'dtype' (e.g. {'dtype': 'float32'})"
+            )
+        if not isinstance(config, Mapping):
+            raise ValueError(
+                f"bytes_to_ndarray config must be a mapping, "
+                f"got {type(config).__name__}"
+            )
+        if "dtype" not in config:
+            raise ValueError(
+                "bytes_to_ndarray config missing required key 'dtype'"
+            )
+        if not isinstance(config["dtype"], str):
+            raise ValueError(
+                "bytes_to_ndarray config: 'dtype' must be a string, "
+                f"got {type(config['dtype']).__name__}"
+            )
+
+        try:
+            np.dtype(config["dtype"])
+        except TypeError as exc:
+            raise ValueError(
+                f"bytes_to_ndarray config: invalid dtype "
+                f"{config['dtype']!r}: {exc}"
+            ) from exc
+        if "shape" in config:
+            shape = config["shape"]
+            if not isinstance(shape, (list, tuple)):
+                raise ValueError(
+                    "bytes_to_ndarray config: 'shape' must be a list or tuple, "
+                    f"got {type(shape).__name__}"
+                )
+            for i, dim in enumerate(shape):
+                if not isinstance(dim, int):
+                    raise ValueError(
+                        f"bytes_to_ndarray config: shape[{i}] must be an "
+                        f"integer, got {dim!r}"
+                    )
+                if dim < -1:
+                    raise ValueError(
+                        f"bytes_to_ndarray config: shape[{i}] must be >= -1, "
+                        f"got {dim!r}"
+                    )
 
 
 @dataclass(frozen=True)
@@ -1102,9 +1400,7 @@ class ResizeTransformer(IValueTransformer):
                 f"resize dimensions must be integers, got {config[0]!r}, {config[1]!r}"
             )
         if h <= 0 or w <= 0:
-            raise ValueError(
-                f"resize dimensions must be > 0, got [{h}, {w}]"
-            )
+            raise ValueError(f"resize dimensions must be > 0, got [{h}, {w}]")
 
 
 _REGION_PRESETS: Dict[str, tuple] = {
@@ -1274,6 +1570,27 @@ class FormatTransformer(IValueTransformer):
                 f"format config must be 'HWC' or 'CHW', got {config!r}"
             )
 
+@dataclass(frozen=True)
+class TransposeTransformer(IValueTransformer):
+    """Convert ndarray layout between HWC and CHW."""
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+
+        if not isinstance(value, np.ndarray):
+            raise TypeError("transpose expects numpy.ndarray input")
+        return np.transpose(value, config)
+
+    @staticmethod
+    def validate_config(config: Any) -> None:
+        if not isinstance(config, (list, tuple)):
+            raise ValueError(
+                f"transpose config must be List[int], got {config!r}"
+            )
+        for x in config:
+            if not isinstance(x, int):
+                raise ValueError(
+                    f"transpose config must be List[int], got {config!r}"
+                )
 
 @dataclass(frozen=True)
 class NormalizeTransformer(IValueTransformer):
@@ -1330,6 +1647,87 @@ class NormalizeTransformer(IValueTransformer):
                 f"normalize source_max must be > source_min, "
                 f"got source_min={s_min}, source_max={s_max}"
             )
+
+
+@dataclass(frozen=True)
+class R1GripperValueToJointTransformer(IValueTransformer):
+    """星海图R1机器人夹爪值转换器。
+
+    将gripper的单一值转换为2个关节的值。
+
+    参数:
+        value: gripper的输入值（模型输出值，范围0-100）
+        config: 配置参数
+
+    返回:
+        8个关节的值列表
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        """将gripper单一值转换为8个关节值。
+
+        Args:
+            value: gripper的输入值（模型输出值，范围0-100）
+            config: 配置参数
+
+        Returns:
+            8个关节的值列表
+        """
+        # 确保输入是数值类型
+        gripper_value = float(value)
+
+        # 根据原始代码逻辑，模型输出值需要除以2000
+        gripper_value = gripper_value / 2000.
+        return [gripper_value, gripper_value]
+
+
+@dataclass(frozen=True)
+class R1GripperJointToValueTransformer(IValueTransformer):
+    """星海图R1机器人夹爪状态提取转换器。
+
+    从完整的关节状态中提取左右夹爪的状态，并转换为二值化状态。
+
+    参数:
+        value: 完整的关节位置列表
+        config: 配置参数，可包含夹爪关节索引信息
+
+    返回:
+        [left_gripper_state, right_gripper_state] 二值化状态列表
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        """从关节状态中提取夹爪状态。
+
+        Args:
+            value: 关节位置列表
+            config: 配置参数，可指定夹爪关节索引
+
+        Returns:
+            [left_gripper_state, right_gripper_state] 二值化状态
+        """
+        # 确保输入是列表或数组
+        if isinstance(value, (list, tuple)):
+            joint_positions = list(value)
+        elif hasattr(value, 'tolist'):
+            joint_positions = value.tolist()
+        else:
+            raise TypeError("moz1_extract_gripper_states expects list or array input")
+
+        # 这些索引需要根据实际的joint_states中的顺序确定
+        cfg = config if isinstance(config, Mapping) else {}
+        left_gripper_idx = cfg.get("left_gripper_idx", None)  # 默认左夹爪wide1_joint索引
+        right_gripper_idx = cfg.get("right_gripper_idx", None)  # 默认右夹爪wide1_joint索引
+
+        if left_gripper_idx is None or left_gripper_idx < 0 or left_gripper_idx + 1 >= len(joint_positions):
+            raise ValueError("Invalid left_gripper_idx configuration")
+        if right_gripper_idx is None or right_gripper_idx < 0 or right_gripper_idx + 1 >= len(joint_positions):
+            raise ValueError("Invalid right_gripper_idx configuration")
+
+        # 转换为二值化状态
+        left_gripper_state = (joint_positions[left_gripper_idx] + joint_positions[left_gripper_idx+1]) * 1000
+        right_gripper_state = (joint_positions[right_gripper_idx] + joint_positions[right_gripper_idx+1]) * 1000
+
+        return [left_gripper_state, right_gripper_state]
 
 
 @dataclass(frozen=True)
@@ -1426,7 +1824,6 @@ class QinglongExtractGripperStatesTransformer(IValueTransformer):
         Returns:
             [left_gripper_state, right_gripper_state] 二值化状态
         """
-
         # 确保输入是列表或数组
         if isinstance(value, (list, tuple)):
             joint_positions = list(value)
@@ -1443,8 +1840,16 @@ class QinglongExtractGripperStatesTransformer(IValueTransformer):
         right_gripper_idx = cfg.get("right_gripper_idx", 15)  # 默认右夹爪索引
 
         # 提取夹爪关节位置
-        left_gripper_pos = float(joint_positions[left_gripper_idx]) if left_gripper_idx < len(joint_positions) else 0.0
-        right_gripper_pos = float(joint_positions[right_gripper_idx]) if right_gripper_idx < len(joint_positions) else 0.0
+        left_gripper_pos = (
+            float(joint_positions[left_gripper_idx])
+            if left_gripper_idx < len(joint_positions)
+            else 0.0
+        )
+        right_gripper_pos = (
+            float(joint_positions[right_gripper_idx])
+            if right_gripper_idx < len(joint_positions)
+            else 0.0
+        )
 
         # 转换为二值化状态: joint_value * 2000 < 90 ? 0 : 100
         left_gripper_state = 0 if left_gripper_pos * 2000 < 90 else 100
@@ -1527,14 +1932,14 @@ class QinglongGripperVisualTransform(IValueTransformer):
 
         # 根据 get_visual_joints_values_for_action 方法生成8个关节指令
         visual_joints = [
-            command_joint,           # Left_1_Joint
-            command_joint * -1,      # Left_2_Joint
-            command_joint * -0.2,    # Left_in_Joint
-            command_joint * -1,      # Left_up_Joint
-            command_joint * 1,       # Right_1_Joint
-            command_joint * 1,       # Right_2_Joint
-            command_joint * 0.2,     # Right_in_Joint
-            command_joint * -1       # Right_up_Joint
+            command_joint,  # Left_1_Joint
+            command_joint * -1,  # Left_2_Joint
+            command_joint * -0.2,  # Left_in_Joint
+            command_joint * -1,  # Left_up_Joint
+            command_joint * 1,  # Right_1_Joint
+            command_joint * 1,  # Right_2_Joint
+            command_joint * 0.2,  # Right_in_Joint
+            command_joint * -1,  # Right_up_Joint
         ]
 
         return visual_joints
@@ -1578,14 +1983,14 @@ class Moz1GripperValueToJointsTransformer(IValueTransformer):
         # 根据 moz1_gripper_controller.cpp 的逻辑转换
         # 输出8维数组: [-5.236x, 0, 0, -8.03x, 5.236x, 0, 0, 8.03x]
         return [
-            -5.235 * gripper_value,     # narrow1_joint
-            0.0,                        # narrow2_joint
-            0.0,                        # narrow3_joint
-            -8.03 * gripper_value,      # narrow_loop_joint
-            5.235 * gripper_value,      # wide1_joint
-            0.0,                        # narrow2_joint
-            0.0,                        # narrow3_joint
-            8.03 * gripper_value        # wide_loop_joint
+            -5.235 * gripper_value,  # narrow1_joint
+            0.0,  # narrow2_joint
+            0.0,  # narrow3_joint
+            -8.03 * gripper_value,  # narrow_loop_joint
+            5.235 * gripper_value,  # wide1_joint
+            0.0,  # narrow2_joint
+            0.0,  # narrow3_joint
+            8.03 * gripper_value,  # wide_loop_joint
         ]
 
 
@@ -1627,12 +2032,24 @@ class Moz1ExtractGripperStatesTransformer(IValueTransformer):
         # left_hand_wide1_joint, right_hand_wide1_joint
         # 这些索引需要根据实际的joint_states中的顺序确定
         cfg = config if isinstance(config, Mapping) else {}
-        left_gripper_idx = cfg.get("left_gripper_wide1_idx", 20)  # 默认左夹爪wide1_joint索引
-        right_gripper_idx = cfg.get("right_gripper_wide1_idx", 28)  # 默认右夹爪wide1_joint索引
+        left_gripper_idx = cfg.get(
+            "left_gripper_wide1_idx", 20
+        )  # 默认左夹爪wide1_joint索引
+        right_gripper_idx = cfg.get(
+            "right_gripper_wide1_idx", 28
+        )  # 默认右夹爪wide1_joint索引
 
         # 提取夹爪关节位置
-        left_gripper_pos = float(joint_positions[left_gripper_idx]) if left_gripper_idx < len(joint_positions) else 0.0
-        right_gripper_pos = float(joint_positions[right_gripper_idx]) if right_gripper_idx < len(joint_positions) else 0.0
+        left_gripper_pos = (
+            float(joint_positions[left_gripper_idx])
+            if left_gripper_idx < len(joint_positions)
+            else 0.0
+        )
+        right_gripper_pos = (
+            float(joint_positions[right_gripper_idx])
+            if right_gripper_idx < len(joint_positions)
+            else 0.0
+        )
 
         # 转换为二值化状态: gripper_value * 200 < 99 ? 0 : 100
         left_gripper_state = 0 if left_gripper_pos * 200 < 99 else 100
@@ -1725,7 +2142,11 @@ class JakaExtractGripperStateTransformer(IValueTransformer):
         left_finger_idx = cfg.get("left_finger_idx", 6)  # 默认左手指关节索引
 
         # 提取左手指关节位置
-        left_finger_pos = float(joint_positions[left_finger_idx]) if left_finger_idx < len(joint_positions) else 0.0
+        left_finger_pos = (
+            float(joint_positions[left_finger_idx])
+            if left_finger_idx < len(joint_positions)
+            else 0.0
+        )
 
         # 根据原始代码逻辑反推夹爪值: gripper_value = left_finger_joint / 5.76 + 0.1
         gripper_value = left_finger_pos / 5.76 + 0.1
@@ -1735,6 +2156,58 @@ class JakaExtractGripperStateTransformer(IValueTransformer):
 
         return [gripper_state]
 
+
+@dataclass(frozen=True)
+class ParallelGripperFingersToStrokeTransformer(IValueTransformer):
+    """平行夹爪两手指位置 → 行程转换器。
+
+    行程 = 左手指位置 + 右手指位置(单位: 米)。
+    两手指读数不一致时同样直接相加(如 左=0.02, 右=0.04 → 行程=0.06)。
+
+    输入: ``[left, right]`` 两元素序列(单位: 米)
+    输出: 行程 float(单位: 米)
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        if isinstance(value, (str, bytes, bytearray, Mapping)):
+            raise TypeError(
+                "parallel_gripper_fingers_to_stroke expects a 2-element "
+                "sequence [left, right]"
+            )
+        try:
+            left, right = value
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "parallel_gripper_fingers_to_stroke expects a 2-element "
+                "sequence [left, right]"
+            ) from exc
+        return float(left) + float(right)
+
+
+@dataclass(frozen=True)
+class ParallelGripperStrokeToFingersTransformer(IValueTransformer):
+    """平行夹爪行程 → 两手指位置转换器。
+
+    行程 S → ``[S/2, S/2]``(两手指对称运动,各占行程一半)。
+
+    输入: 行程 float(单位: 米)
+    输出: ``[left, right]`` 两元素列表(单位: 米)
+    """
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        if isinstance(value, (str, bytes, bytearray)):
+            raise TypeError(
+                "parallel_gripper_stroke_to_fingers expects a numeric "
+                "stroke value in meters"
+            )
+        try:
+            stroke = float(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "parallel_gripper_stroke_to_fingers expects a numeric "
+                "stroke value in meters"
+            ) from exc
+        return [stroke / 2.0, stroke / 2.0]
 
 
 def _validate_targeted_config(
@@ -1993,6 +2466,38 @@ class EulerModuloTransformer(IValueTransformer):
         return indices
 
 
+class JpegToBase64Transformer(IValueTransformer):
+    """Encode JPEG image bytes to base64 string."""
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+
+        if isinstance(value, np.ndarray):
+            raw = value.tobytes()
+        elif isinstance(value, (bytes, bytearray)):
+            raw = bytes(value)
+        else:
+            raise ValueError(
+                f"jpeg_to_base64 expects bytes or ndarray, got {type(value)!r}"
+            )
+        return base64.b64encode(raw).decode("ascii")
+
+
+@dataclass(frozen=True)
+class ScalarToRosFloat64Transformer(IValueTransformer):
+    """Convert a scalar numeric value into std_msgs.msg.Float64."""
+
+    def transform(self, value: Any, config: Any = None, context: Any = None) -> Any:
+        try:
+            from std_msgs.msg import Float64
+        except ImportError as e:
+            raise ImportError(
+                "scalar_to_ros_float64 requires std_msgs.msg.Float64"
+            ) from e
+        msg = Float64()
+        msg.data = float(value)
+        return msg
+
+
 DEFAULT_TRANSFORMERS: Dict[str, IValueTransformer] = {
     "identity": IdentityTransformer(),
     "to_float": ToFloatTransformer(),
@@ -2000,6 +2505,7 @@ DEFAULT_TRANSFORMERS: Dict[str, IValueTransformer] = {
     "to_str": ToStrTransformer(),
     "to_bool": ToBoolTransformer(),
     "to_list": ToListTransformer(),
+    "list_wrapper": ListWrapperTransformer(),
     "slice": SliceTransformer(),
     "index": IndexTransformer(),
     "subtract": SubtractTransformer(),
@@ -2016,7 +2522,9 @@ DEFAULT_TRANSFORMERS: Dict[str, IValueTransformer] = {
     ),
     "ndarray_to_png": NdarrayToPngTransformer(),
     "ndarray_to_jpeg": NdarrayToJpegTransformer(),
+    "jpeg_passthrough": JpegPassthroughTransformer(),
     "ndarray_to_bytes": NdarrayToBytesTransformer(),
+    "bytes_to_ndarray": BytesToNdarrayTransformer(),
     "ndarray_to_webp": NdarrayToWebpTransformer(),
     "ros_image_to_ndarray": RosImageToNdarrayTransformer(),
     "ros_image_to_png": RosImageToPngTransformer(),
@@ -2039,7 +2547,10 @@ DEFAULT_TRANSFORMERS: Dict[str, IValueTransformer] = {
     "rgb_to_bgr": RgbToBgrTransformer(),
     "resize": ResizeTransformer(),
     "format": FormatTransformer(),
+    "transpose": TransposeTransformer(),
     "normalize": NormalizeTransformer(),
+    "r1_gripper_value_to_joint": R1GripperValueToJointTransformer(),
+    "r1_gripper_joint_to_value": R1GripperJointToValueTransformer(),
     "so101_gripper_value_to_joint": SO101GripperValueToJointTransformer(),
     "so101_gripper_joint_to_value": SO101GripperJointToValueTransformer(),
     "extract_gripper_states": QinglongExtractGripperStatesTransformer(),
@@ -2049,7 +2560,11 @@ DEFAULT_TRANSFORMERS: Dict[str, IValueTransformer] = {
     "moz1_extract_gripper_states": Moz1ExtractGripperStatesTransformer(),
     "jaka_gripper_value_to_joints": JakaGripperValueToJointsTransformer(),
     "jaka_extract_gripper_state": JakaExtractGripperStateTransformer(),
+    "parallel_gripper_fingers_to_stroke": (ParallelGripperFingersToStrokeTransformer()),
+    "parallel_gripper_stroke_to_fingers": (ParallelGripperStrokeToFingersTransformer()),
     "crop": CropTransformer(),
+    "jpeg_to_base64": JpegToBase64Transformer(),
+    "scalar_to_ros_float64": ScalarToRosFloat64Transformer(),
 }
 
 
@@ -2172,6 +2687,11 @@ def build_transformer_registry(
     if overrides:
         registry.update(overrides)
     return registry
+
+
+# ---------------------------------------------------------------------------
+# Payload-level transforms (operate on entire payload, not individual values)
+# ---------------------------------------------------------------------------
 
 
 def json_pack(payload: Any, config: Any = None) -> bytes:

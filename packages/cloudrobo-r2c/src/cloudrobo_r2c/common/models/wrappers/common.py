@@ -58,9 +58,11 @@ NUMPY_TO_DTYPE: Dict[Any, str] = {
     np.bool_: "BOOL",
 }
 
+
 @dataclass
 class Pose7D:
     """7-dimensional pose [tx, ty, tz, qx, qy, qz, qw]"""
+
     data: List[float] = field(default_factory=list)
 
     def __iter__(self) -> Iterator[float]:
@@ -78,17 +80,21 @@ class Pose7D:
         """Display data list directly when printing, hide class wrapper details"""
         return repr(self.data)
 
+
 @dataclass
 class StampedPose7D:
     """7-dimensional pose with frame name"""
+
     frame_id: str
     pose: Pose7D
+
 
 @dataclass
 class Vector3:
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
+
 
 @dataclass
 class Quaternion:
@@ -97,13 +103,11 @@ class Quaternion:
     z: float = 0.0
     w: float = 1.0
 
+
 @dataclass
 class PoseWithCovariance:
     pose: Pose7D
     covariance: List[float] = field(default_factory=list)
-
-
-# ── Extension mechanism ────────────────────────────────────────────
 
 
 @dataclass
@@ -121,8 +125,11 @@ class ExtensionValue:
     ``shape`` follows NumPy semantics: ``[]`` = scalar, ``[N]`` = 1D,
     ``[H, W]`` = 2D, ``[H, W, C]`` = image.
 
-    ``mime_type`` is optional and only meaningful when
-    ``dtype == "BYTES"`` (e.g. ``"image/jpeg"``, ``"image/png"``).
+    ``mime_type`` is optional and dtype-dependent (see
+    ``ExtensionSpec``): ``BYTES`` accepts binary/image types (e.g.
+    ``"image/jpeg"``, ``"image/png"``, ``"application/octet-stream"``),
+    ``STRING`` accepts text types (``"text/plain"``,
+    ``"application/json"``), and numeric dtypes only allow ``""``.
     """
 
     dtype: str = ""
@@ -130,7 +137,6 @@ class ExtensionValue:
     data: bytes = b""
     mime_type: str = ""
 
-    # ── factory methods ─────────────────────────────────────────
 
     @classmethod
     def from_ndarray(cls, arr: "np.ndarray", mime_type: str = "") -> "ExtensionValue":
@@ -160,23 +166,33 @@ class ExtensionValue:
         """Build from a scalar value."""
         if isinstance(value, bool):
             return cls(
-                dtype="BOOL", shape=[],
+                dtype="BOOL",
+                shape=[],
                 data=b"\x01" if value else b"\x00",
             )
         if isinstance(value, int):
             return cls(
-                dtype="INT64", shape=[],
+                dtype="INT64",
+                shape=[],
                 data=value.to_bytes(8, byteorder="little", signed=True),
             )
         if isinstance(value, float):
             import struct
+
             return cls(
-                dtype="FLOAT64", shape=[],
+                dtype="FLOAT64",
+                shape=[],
                 data=struct.pack("<d", value),
             )
         raise TypeError(f"Unsupported scalar type: {type(value)}")
 
-    # ── consumer helpers ────────────────────────────────────────
+
+    def ext_decode(self)-> Any:
+        if self.dtype == "STRING":
+            return self.to_string()
+        if len(self.shape) == 0:
+            return self.to_scalar()
+        return self.to_ndarray()
 
     def to_ndarray(self) -> "np.ndarray":
         """Decode data into a numpy ndarray using dtype + shape.
@@ -194,34 +210,30 @@ class ExtensionValue:
     def to_string(self) -> str:
         """Decode STRING-typed data as UTF-8."""
         if self.dtype != "STRING":
-            raise ValueError(
-                f"to_string() requires dtype='STRING', got {self.dtype!r}"
-            )
+            raise ValueError(f"to_string() requires dtype='STRING', got {self.dtype!r}")
         return self.data.decode("utf-8")
 
     def to_scalar(self) -> int | float | bool:
         """Decode a scalar extension value."""
         if self.shape:
-            raise ValueError(
-                f"to_scalar() requires shape=[], got shape={self.shape}"
-            )
+            raise ValueError(f"to_scalar() requires shape=[], got shape={self.shape}")
         if self.dtype == "BOOL":
             return self.data != b"\x00"
         if self.dtype == "INT64":
             return int.from_bytes(self.data, byteorder="little", signed=True)
         if self.dtype == "FLOAT64":
             import struct
+
             return struct.unpack("<d", self.data)[0]
         if self.dtype == "FLOAT32":
             import struct
+
             return struct.unpack("<f", self.data)[0]
         if self.dtype == "INT32":
             return int.from_bytes(self.data, byteorder="little", signed=True)
         if self.dtype == "UINT8":
             return int.from_bytes(self.data, byteorder="little", signed=False)
-        raise ValueError(
-            f"to_scalar() unsupported for dtype={self.dtype!r}"
-        )
+        raise ValueError(f"to_scalar() unsupported for dtype={self.dtype!r}")
 
     # ── proto helpers (used by to_protobuf / from_pb_object) ───
 
@@ -243,9 +255,7 @@ class ExtensionValue:
         return name
 
     @classmethod
-    def from_proto_extensions(
-        cls, pb_extensions: Any
-    ) -> Dict[str, "ExtensionValue"]:
+    def from_proto_extensions(cls, pb_extensions: Any) -> Dict[str, "ExtensionValue"]:
         """Convert proto ``map<string, ExtensionValue>`` to Python dict."""
         result: Dict[str, ExtensionValue] = {}
         for key, pb_ev in pb_extensions.items():

@@ -56,6 +56,15 @@ runtime:
 hardware:
   # 使用内置 DummyRobotHardwareAdapter
   type: "dummy"
+  # ── state/current 发布绑定（runtime.current_state 废止，会话级周期
+  #    上报一并移除；轻量接入改走 hardware.topics 绑定，collector 为
+  #    adapter.get_runtime）───────────────────────────────────────────
+  topics:
+    "{project_id}/{device_id}/state/current":
+      proto: "cloudrobo_r2c.common.models:RunTimeMessage"
+      direction: "publish"
+      rate_hz: 2                      # 状态发布频率（2Hz）
+      collector: "get_runtime"
   config:
     joint_names:
       - "shoulder_pan.pos"
@@ -66,15 +75,64 @@ hardware:
       - "gripper.pos"
     initial_joint_positions: [0.0, 0.1, -0.2, 0.0, 0.0, 0.5]
     max_joint_speed_rad_s: 1.5
+    # state/current 帧 location（"当前朝向;当前地理位置" 格式，可按需修改）
+    location: "0;上海世博展览馆"
     image_specs:
+      # ── 帧源类型说明（每个 key 下只能选择一种）────────────────────────
+      # 1. realsense: 真实 RealSense 相机（用 RealSense 驱动打开，可直接
+      #    访问 rs.option 控制项 exposure/gain/brightness 等，得到正确曝光的
+      #    彩色画面）。同一台 L515 不能被 V4L2 与 RealSense 同时打开
+      #    （xioctl(VIDIOC_S_FMT) failed, errno=16 Device or resource busy）。
+      # 2. source: 真实 V4L2/USB 相机（/dev/videoN 或数字索引）。
+      # 3. video: mp4/avi 视频文件循环播放（后台线程按视频帧率读帧写帧槽，
+      #    推流帧率不依赖推理循环；可选 fps 覆盖帧率、loop=false 不循环、
+      #    width/height 可选 resize）。
+      # 4. file: 静态图片文件（后台线程按 fps 周期刷新帧槽时间戳，默认 20）。
+      # 5. h/w/c: 随机图（后台线程按 fps 周期生成新随机图，默认 20；画面
+      #    动态变化，适合演示/联调推流链路）。
+      #
+      # 合成帧源（video/file/h-w-c）均有独立后台线程持续写共享帧槽，无需
+      # 真实相机即可验证 LiveKit 推流。示例（取消注释即可切换）：
+      #   front:
+      #     video: "assets/demo.mp4"        # mp4 视频循环推流
+      #   wrist:
+      #     file: "assets/wrist.png"        # 静态图推流
+      #   rear:
+      #     h: 480
+      #     w: 640
+      #     c: 3
+      #     fps: 10                          # 随机图 @10fps
+      #
+      # 各路相机可混合配置（真实相机 + 随机图 + 视频 + 静态图自由组合），
+      # 每路独立后台线程互不影响。真实相机（source/realsense）或视频
+      # （video）打开失败时直接报错退出程序（不回退随机图），请先排查
+      # 设备/文件问题后再运行。示例：
+      #   front:                             # 真实相机（L515/VideoCapture）
+      #     realsense: {serial: "F1180540", width: 640, height: 480, fps: 30}
+      #   random_cam:                        # 随机图 @15fps
+      #     h: 480
+      #     w: 640
+      #     c: 3
+      #     fps: 15
+      #   video_cam:                         # mp4 视频循环推流
+      #     video: "assets/demo.mp4"
+      #
+      # 注意：合成帧源的 key 需与 camera_streaming.camera_device_map 的
+      # key 一致（见下方 camera_streaming 配置段），推流侧才能取到帧。
+      #
+      # ── 以下为两路随机图（合成帧源，无需真实相机）──────────────────
+      # 后台线程按 fps 周期生成新的随机噪声图（np.random.randint），
+      # 画面动态变化，适合演示/联调推流链路（无需接相机设备）。
       front:
-        h: 255
-        w: 255
+        h: 480
+        w: 640
         c: 3
+        fps: 20
       wrist:
-        h: 255
-        w: 255
+        h: 480
+        w: 640
         c: 3
+        fps: 15
     commands:
       go_home:
         type: go_home
@@ -166,3 +224,35 @@ r2c_to_device:
       source_index: 5
       use_assign_dotted: false
       required: true
+
+# ── 相机推流（LiveKit WebRTC，可选能力） ─────────────────────────────────
+# 帧源为两路合成随机图（hardware.config.image_specs 的 h/w/c 配置），
+# 推流侧只读共享帧槽，无需真实相机。云端下发 CAMERA_START 后经 LiveKit
+# 推流，能力信息上报到 {pid}/{did}/device/camera_capability。
+camera_streaming:
+  enabled: true
+  # 相机方位 → 帧槽 key（需与 hardware.config.image_specs 的 key 对应）
+  camera_device_map:
+    front: "front"
+    wrist: "wrist"
+  # 全局默认推流参数（未在 camera_overrides 中指定的相机回退到此值）
+  default_width: 640
+  default_height: 480
+  default_fps: 20
+  # 每路相机独立推流配置（可选；覆盖 default_width/height/fps）
+  # 未列出的相机使用上面的默认值。width/height/fps 均可选，逐字段回退。
+  camera_overrides:
+    front:
+      width: 640
+      height: 480
+      fps: 20
+    wrist:
+      width: 640
+      height: 480
+      fps: 15
+  max_bitrate: 300000
+  max_framerate: 20
+  connect_timeout: 5.0
+  dynacast: true
+  jwt_renewal_min_window: 60
+  auto_stop_on_no_viewer: true

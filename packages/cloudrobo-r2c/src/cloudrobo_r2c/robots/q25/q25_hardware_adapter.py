@@ -14,7 +14,7 @@ from typing import Any, Dict, Mapping, Optional
 
 import numpy as np
 
-from cloudrobo_r2c.core.interfaces import IRobotHardwareAdapter
+from cloudrobo_r2c.core.interfaces import ICameraFrameSource, IRobotHardwareAdapter
 from .q25_client import Q25UDPClient, RobotStatus, DEFAULT_ROBOT_IP, DEFAULT_ROBOT_PORT, get_camera_rtsp_url, DEFAULT_RTSP_PORT
 
 logger = logging.getLogger(__name__)
@@ -106,8 +106,11 @@ class Q25HardwareConfig:
     dry_run: bool = False
 
 
-class Q25HardwareAdapter(IRobotHardwareAdapter):
+class Q25HardwareAdapter(IRobotHardwareAdapter, ICameraFrameSource):
     """Q25 Ultra 四足机器人硬件适配器.
+
+    实现 IRobotHardwareAdapter（UDP 控制/状态）与 ICameraFrameSource（RTSP
+    相机共享帧槽），后者供 LiveKit 相机推流侧只读取帧。
 
     用法示例:
         config = Q25HardwareConfig(robot_ip="192.168.3.20")
@@ -167,6 +170,8 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
         # 摄像头相关 - 支持多摄像头
         self._cameras: Dict[str, Any] = {}  # camera_location -> cv2.VideoCapture
         self._latest_images: Dict[str, np.ndarray] = {}  # camera_location -> image
+        self._latest_image_ts: Dict[str, float] = {}  # camera_location -> time.monotonic()
+        self._camera_lock = threading.Lock()  # 保护帧槽（采集线程写 / 推流读）
 
         # 状态缓存
         self._latest_status: Optional[RobotStatus] = None
@@ -341,9 +346,14 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
     def _fill_camera_images(self, obs: Dict[str, Any]) -> None:
         """填充摄像头图像数据."""
         if self._config.camera_enabled and self._latest_images:
-            for camera_location, image in self._latest_images.items():
-                if image is not None:
-                    obs[f"camera_{camera_location}"] = image
+            with self._camera_lock:
+                snapshots = {
+                    camera_location: image
+                    for camera_location, image in self._latest_images.items()
+                    if image is not None
+                }
+            for camera_location, image in snapshots.items():
+                obs[f"camera_{camera_location}"] = image
 
     def get_observation(self) -> Mapping[str, Any]:
         """获取观察数据.
@@ -691,10 +701,29 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
             for camera_location, camera in self._cameras.items():
                 ret, frame = camera.read()
                 if ret:
-                    self._latest_images[camera_location] = frame
+                    with self._camera_lock:
+                        self._latest_images[camera_location] = frame
+                        self._latest_image_ts[camera_location] = time.monotonic()
                     has_valid_frame = True
             if has_valid_frame:
                 time.sleep(0.03)  # ~30fps
+
+    # ── ICameraFrameSource（相机推流共享帧槽） ──────────────────────────────
+
+    def get_latest_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """返回指定相机的最近一帧 BGR 图像（H, W, 3）uint8，无帧返回 None。
+
+        与推流侧 CameraCapture 共享帧槽（RTSP 设备由本适配器独占采集），
+        内部加锁并返回副本，避免与采集线程写入竞争。
+        """
+        with self._camera_lock:
+            frame = self._latest_images.get(camera_id)
+            return None if frame is None else frame.copy()
+
+    def get_latest_timestamp(self, camera_id: str) -> float:
+        """返回最近一帧的采集时间戳（time.monotonic()），无帧返回 0.0。"""
+        with self._camera_lock:
+            return self._latest_image_ts.get(camera_id, 0.0)
 
     def _on_status_update(self, status: RobotStatus) -> None:
         """状态数据回调."""

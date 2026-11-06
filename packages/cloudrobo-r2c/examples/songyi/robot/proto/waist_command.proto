@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+// 腰部控制指令下行 topic（{project_id}/{device_id}/waist_command）。
+//
+// 腰部控制不再经 action 下发（原 extensions.waist_joints 通道已删除）：
+// 仅当本 topic 收到指令时才控制腰部。腰部前 3 关节写死（demo 值，代码级
+// 锁定，action/topic 均无法触碰），仅第 4 关节可控。
+//
+// position 数组对齐**可控关节段**：当前腰部仅 1 个值（第 4 关节，弧度），
+// 数值语义与 DucoAuxAxis.servoj 可控段入参一致。
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "WaistCommandProto";
+option java_multiple_files = false;
+
+message WaistCommand {
+
+  // 消息终端源: {project_id}/{device_id}
+  string source = 1;
+
+  // 时间戳（毫秒）
+  int64 timestamp = 2;
+
+  // 可控关节目标位置（弧度）：对齐可控段，当前腰部仅第 4 关节 1 个值
+  repeated double position = 3;
+}

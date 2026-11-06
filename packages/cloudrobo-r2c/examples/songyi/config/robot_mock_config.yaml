@@ -1,0 +1,277 @@
+# 新松双臂 Mock 全链路配置（Program A 的 main session）
+# 与 robot_songyi_config.yaml 同构，核心差异：devices.mock: true——
+# 双臂/腰部走软件仿真机器人（songyi_robot.mock_duco，接口与
+# 真机逐一同名同参，无 Thrift RPC / 485 Modbus），用于无硬件联调：
+# - 观测：joint_states / tcp_poses / end_effector_states（夹爪反馈）/
+#   current_state 全组可读，数值由仿真线程合成（get_robot_state 恒正常
+#   四元组、servo_errid 恒 0——告警体系静默，模拟健康机器人）
+# - 动作：servoj/movej/servoj_pose/movel/servol/夹爪指令后按速度限幅
+#   平滑运动到目标（观测读数渐变），movej 阻塞到位后返回
+# - 事件：mock_events 每 60s 上报「机器人电量低」event（经主 session
+#   直发本地总线，forwarder 转发上云）
+# - 相机未配置（观测 images 为空；如需图像可另行接入回放或 teleimager）
+#
+# 安全提示：mock 模式不会驱动任何真实硬件；切回真机务必还原
+# robot_songyi_config.yaml 并确认 dry_run 双层与急停值守。
+
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 30.0
+  max_duration_s: 0.0
+  dry_run: false
+  # 心跳自动发布（主 session {pid}/{did}/state/heartbeats）：2Hz
+  # battery_percentage 可不配置——不配置时心跳帧不上传 battery 字段
+  heartbeat: { enabled: true, interval_ms: 600, jitter_ms: 50,
+               status: ONLINE, mode: AUTO }
+  action_response_timeout_s: 3.0
+  action_response_timeout_initial_s: 3.0
+  action_response_timeout_backoff: 3.0
+  max_enqueue_actions_per_chunk: 30
+  enable_action_chunk_alignment: false
+  skip_initial_observations: 1
+
+  # ── 模式控制（sync_client 公共能力 ModeControl）────────────────
+  # 遥操/协助进出 + 心跳 mode（AUTO/CONTROLLED/ASSISTED）联动的单点
+  # 决策；回调名解析到 hardware adapter 方法（进出的具体动作）。
+  mode_control:
+    teleop_enter_cb: "teleop_enter"
+    teleop_exit_cb: "teleop_exit"
+    assist_enter_cb: "assist_enter"
+    assist_exit_cb: "assist_exit"
+
+  async_request:
+    enabled: false
+    publish_trigger_threshold: 10
+    fusion:
+      strategy: replace
+      window_size: 10
+      # 类型感知融合：仅声明前 7 维（左臂）——nearest_neighbor 匹配距离
+      # 只计算左臂 7 关节，右臂不参与
+      state_types:
+      - joint_angle
+      - joint_angle
+      - joint_angle
+      - joint_angle
+      - joint_angle
+      - joint_angle
+      - joint_angle
+
+  keyboard_control:
+    # a/d 腰部点动 / s 腰部回 0 / l/r 左右臂位姿循环 / g 夹爪开合 /
+    # h 双臂复位+夹爪张开 / 空格暂停 / q 退出
+    enabled: true
+    keymap:
+      a: "waist_increase"
+      d: "waist_decrease"
+      s: "waist_reset"
+      l: "left_toggle"
+      r: "right_toggle"
+      g: "toggle_gripper"
+
+hardware:
+  type: "custom"
+  # 双 entry-point 形态：mock 面用 SongyiMockAdapter（真机面为
+  # SongyiHardwareAdapter）。构造器强制 devices.mock=true，yaml 无需
+  # 显式声明 mock 键
+  class_path: "songyi_robot.songyi_adapter.SongyiMockAdapter"
+  # ── 自定义 topic 四绑定（与真机配置同构，全部走主 session）─────
+  topics:
+    "{project_id}/{device_id}/state/current":
+      proto: "cloudrobo_r2c.common.models:RunTimeMessage"   # wrapper 类（与 pb2 直引用等价）
+      direction: "publish"
+      rate_hz: 2
+      collector: "get_runtime"
+      translator:
+        mappings:
+          - source_path: "timestamp"
+            target_key: "_runtime_timestamp"
+    "{project_id}/{device_id}/waist_command":
+      proto: "songyi.waist_command"    # r2c_sdk.protos 注册名（siasun 专属 proto）
+      direction: "subscribe"
+      on_message: "on_waist_command"
+    # 告警不走绑定：MockEventSource 经 EventManager 单例推送，
+    #   topic 固定 {project_id}/{device_id}/event（三绑定）
+  custom_config:
+    # ── Mock 仿真（SongyiMockAdapter 强制 devices.mock=true）──────
+    # 双臂/腰部全部走 MockDucoArm/MockDucoAuxAxis 软件仿真
+    devices:
+      # location: "上海世博展览馆"   # current_state.location 第二段（可选）
+      # 以下笛卡尔通道配置面与真机同构（mock 侧 tcp_velocity/q_near 仅
+      # 记录生效语义，运动由 TCP 插值仿真；check_ik 恒有解）
+      tcp_velocity: 0.1
+      ik_check: false                # mock 无需 IK 门控（check_ik 恒 True）
+      left:  { ip: "mock", port: 7003, gripper_hand_id: 1, velocity: 0.8,
+               tool: "tcp_1", wobj: "arm_1_base" }
+      right: { ip: "mock", port: 7004, gripper_hand_id: 1, velocity: 0.8,
+               tool: "tcp_1", wobj: "arm_2_base" }
+      # mock 专属（可选）：initial_joints 双臂初始关节位（缺省内置
+      # reset_pose 风格位）、max_joint_velocity 关节最大速度（弧度/s）、
+      # noise 读数伪噪声幅度（缺省 0 保证确定性）
+      # initial_joints: [-1.03, -1.52, 1.57, 2.33, -0.36, 0.17, 0.18]
+      # max_joint_velocity: 1.5
+      # noise: 0.0
+
+    # 腰部：mock 下连接即视为外部已上电使能（wait_power_on 立即通过）；
+    # fixed_joints/朝向标定语义与真机一致
+    waist: { enabled: true, ip: "mock", port: 7020,
+             velocity: 0.5, acceleration: 5.0, poll_interval_s: 2.0,
+             enforce_fixed_pose: true,
+             fixed_joints: [-0.8419940400200225, 1.561184229406744, -0.7249411193131796],
+             orientation_invert: false, orientation_offset_deg: 0.0,
+             jog_step_rad: 0.05, jog_max_rad: 1.58, jog_min_rad: -1.58 }
+    head:  { enabled: false }
+
+    # 夹爪：仿真反馈（gripper_command 目标后渐进逼近，0-10 上行）
+    gripper_init_on_connect: true
+    gripper_full_calibration: false
+
+    # ── Mock 事件源（devices.mock=true 时生效）──
+    # 每 interval_s 秒一个完整告警周期：发布「机器人电量低」告警
+    # （ends_at=0 进行中）→ clear_after_s 秒后复用同一 event_id 自动解除
+    # （severity=Info、abstract「…解除」、ends_at=当前时刻）——平台侧
+    # 按 event_id 配对还原完整告警区间（语义）。经主 session 直发
+    # 本地总线，forwarder 转发上云/本地订阅可见；首周期启动后立即发布。
+    # clear_after_s: 0 关闭自动解除（仅上报告警）。
+    mock_events:
+      enabled: true
+      interval_s: 60          # 周期间隔（秒，从告警发布起算）；首周期立即发
+      clear_after_s: 30       # 告警发布后自动解除延时（秒）；0=不自动解除
+      abstract: "机器人电量低"
+      type: "alarm"           # event=事件 / alarm=告警
+      severity: "Major"       # 告警 severity：Critical / Major / Minor / Info
+      content: "机器人电量低，请及时充电"
+      # 解除文案（缺省自动生成：severity=Info、abstract=「{abstract}解除」、
+      # content=「{content}已恢复」，可覆盖）：
+      # clear_severity: "Info"
+      # clear_abstract: "机器人电量低解除"
+      # clear_content: "机器人电量低已恢复"
+
+    task: "songyi mock task"
+
+    dry_run: false
+    max_step_rad: 3.14
+    state_max_age_ms: 60
+    reset_velocity: 0.5
+
+    # ── 告警上报（mock 下 get_robot_state 恒正常/servo_errid 恒 0
+    # → 状态告警静默，可对接平台验证 event 链路）──────────────────
+    alarms:
+      # mock 用独立 state_file：避免读/写现场真机的告警持久化快照
+      # （否则现场遗留的激活告警会在 mock 启动时补发"幽灵解除"事件）
+      state_file: "config/songyi_alarm_state_mock.json"
+      idle:
+        enabled: false             # mock 联调建议开：验证空闲告警/解除配对
+        threshold_s: 60
+      status:
+        enabled: true
+        clear_enabled: true
+        check_interval_s: 2.0
+        internal_error:
+          severity: Minor
+          abstract: "内部错误"
+          content: "内部错误"
+          clear_severity: Info
+          clear_abstract: "内部错误解除"
+          clear_content: "内部错误解除"
+        errid_mappings: {}
+
+    granularity: { velocity: 1, torque: 1, acceleration: 1, temperature: 1, current: 1 }
+
+    reset_pose:
+    - -1.0320814488493082 # left
+    - -1.518377327058867
+    - 1.5707963267948966
+    - 2.328474977986255
+    - -0.36408075262473183
+    - 0.1747299991200988
+    - 0.1772946232498458
+    - 1.0320814488493082 #right
+    - -1.518377327058867
+    - -1.5707963267948966
+    - 2.328474977986255
+    - 0.36408075262473183
+    - 0.1747299991200988
+    - -0.1772946232498458
+    teleop:
+      enter_cmd: ""
+      enter_timeout_s: 10
+      reset_on: { enter: false, exit: false }
+
+# ── 相机推流（可选能力）─────────────────────────────────────────────
+# mock 无相机（custom_config.cameras 未配置 → 帧槽为空 → 能力枚举 0 相机，
+# 推流服务启动但不影响主链路；保持与真机配置结构一致）
+camera_streaming:
+  enabled: true
+  camera_device_map: {}
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  task: "songyi mock task"
+  image_encoding: jpeg
+  mappings:
+    - target_key: "joint_states.names"
+      source_path: "joint_states.names"
+    - target_key: "joint_states.position"
+      source_path: "joint_states.position"
+    - target_key: "joint_states.velocity"
+      source_path: "joint_states.velocity"
+      required: false
+    - target_key: "joint_states.torque"
+      source_path: "joint_states.torque"
+      required: false
+    - target_key: "end_effector_states.names"
+      source_path: "end_effector_states.names"
+      required: false
+    - target_key: "end_effector_states.position"
+      source_path: "end_effector_states.position"
+      required: false
+    - target_key: "end_effector_poses.names"
+      source_path: "tcp_poses.names"
+      required: false
+    - target_key: "end_effector_poses.pose"
+      source_path: "tcp_poses.pose"
+      required: false
+    # mock 无相机（images 空），映射保留 required: false 不阻塞观测
+    - target_key: "images.color.head"
+      source_path: "images.head"
+      transforms: jpeg_passthrough
+      required: false
+    - target_key: "images.color.wrist_left"
+      source_path: "images.wrist_left"
+      transforms: jpeg_passthrough
+      required: false
+    - target_key: "images.color.wrist_right"
+      source_path: "images.wrist_right"
+      transforms: jpeg_passthrough
+      required: false
+
+# ── 下行: R2C action step → adapter.send_action() 入参 ────────────────
+# 双臂按 joint_states.names 匹配：action 只含单臂（names 缺另一
+# 臂）时对应 target 整体跳过——缺失的臂不下发控制指令。
+r2c_to_device:
+  mappings:
+    - target: "left_joints"
+      source: "joint_states.position"
+      source_name_ref: ["左肩俯仰", "左肩横滚", "左肩偏航", "左肘俯仰", "左腕横滚", "左腕偏航", "左腕俯仰"]
+      required: false
+    - target: "right_joints"
+      source: "joint_states.position"
+      source_name_ref: ["右肩俯仰", "右肩横滚", "右肩偏航", "右肘俯仰", "右腕横滚", "右腕偏航", "右腕俯仰"]
+      required: false
+    - target: "left_gripper"
+      source: "end_effector_states.position"
+      source_name_ref: "左夹爪"
+      required: false
+    - target: "right_gripper"
+      source: "end_effector_states.position"
+      source_name_ref: "右夹爪"
+      required: false
+    - target: "left_pose"
+      source: "end_effector_poses.左末端.pose"
+      required: false
+    - target: "right_pose"
+      source: "end_effector_poses.右末端.pose"
+      required: false

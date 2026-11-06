@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from .sync_client import SyncRobotClient
 
 try:
-    __version__ = version("cloudrobo-r2c")
+    __version__ = version("hw-cloudrobo-r2c")
 except PackageNotFoundError:
     __version__ = "unknown"
 

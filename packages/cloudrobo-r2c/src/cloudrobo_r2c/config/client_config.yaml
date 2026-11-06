@@ -1,8 +1,8 @@
 # Robot to Cloud SDK Client Configuration
 
 # 租户与设备标识
-project_id: "project-demo"
-device_id: "so101"
+project_id: "r2c"
+device_id: "local"
 client_id: "python-client-001"
 
 # Zenoh 连接配置

@@ -53,7 +53,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from cloudrobo_r2c.common.utils import summarize_observation_for_log
 from cloudrobo_r2c.core.config_mapper import TransformSpec
-from cloudrobo_r2c.core.interfaces import IRobotHardwareAdapter
+from cloudrobo_r2c.core.interfaces import ICameraFrameSource, IRobotHardwareAdapter
 from cloudrobo_r2c.core.internal.class_loading import SecurityError, validate_module_security
 from cloudrobo_r2c.core.transformers import build_transformer_registry
 
@@ -86,6 +86,20 @@ class SubscriptionConfig:
 
 
 @dataclass(frozen=True)
+class CameraSubscriptionConfig:
+    """ROS2 图像话题订阅配置（相机推流专用）。
+
+    与 ``subscriptions`` 分离：图像消息走独立帧槽（``_camera_frames``），
+    不经过 include_fields/transforms 处理，避免破坏图像数据。
+    """
+
+    topic: str
+    msg_type: str = "sensor_msgs.msg.Image"
+    qos: int = 10
+    store_as: str = ""  # 空则用订阅名
+
+
+@dataclass(frozen=True)
 class CommandPublisherConfig:
     topic: str
     msg_type: str
@@ -113,6 +127,7 @@ class Ros2AdapterConfig:
     spin_timeout_sec: float
     auto_spin: bool
     subscriptions: Mapping[str, SubscriptionConfig]
+    camera_subscriptions: Mapping[str, CameraSubscriptionConfig]
     command_publishers: Mapping[str, CommandPublisherConfig]
     command_services: Mapping[str, CommandServiceConfig]
     action_clients: Mapping[str, ActionClientConfig]
@@ -149,8 +164,13 @@ class ObservationSyncConfig:
 
 
 @dataclass
-class Ros2HardwareAdapter(IRobotHardwareAdapter):
-    """Hardware adapter backed by configurable ROS2 subscriptions/publishers."""
+class Ros2HardwareAdapter(IRobotHardwareAdapter, ICameraFrameSource):
+    """Hardware adapter backed by configurable ROS2 subscriptions/publishers.
+
+    相机推流：``ros2.camera_subscriptions`` 声明的图像话题（sensor_msgs/Image
+    或 CompressedImage）由独立回调解码为 BGR 帧写入 ``_camera_frames`` 帧槽，
+    推流侧 ``CameraCapture`` 通过 ``get_latest_frame`` 读取。
+    """
 
     config: Mapping[str, Any]
     rclpy_module: Optional[Any] = None
@@ -173,6 +193,14 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
         default_factory=dict, init=False, repr=False
     )
     _latest_timestamp_ns: int = field(default=0, init=False, repr=False)
+
+    # 相机推流帧槽（store_as -> BGR 最近帧 / time.monotonic()）
+    _camera_frames: Dict[str, Any] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _camera_frame_ts: Dict[str, float] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     _command_publishers: Dict[str, Any] = field(
         default_factory=dict, init=False, repr=False
@@ -245,7 +273,6 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
             "the commands.go_home YAML preset (see ADR-0005)."
         )
 
-
     def connect(self) -> None:
         if self._connected:
             logger.debug("ROS2 adapter already connected; skipping connect()")
@@ -265,6 +292,7 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
         self._node = rclpy.create_node(self._adapter_config.node_name)
 
         self._setup_subscriptions(self._adapter_config)
+        self._setup_camera_subscriptions(self._adapter_config)
         self._setup_command_publishers(self._adapter_config)
         self._setup_command_services(self._adapter_config)
         self._setup_action_clients(self._adapter_config)
@@ -514,7 +542,11 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
         logger.debug(
             "Publishing to ROS2 command publisher '%s' (keys=%s)",
             publisher_name,
-            list(raw_payload.keys()) if isinstance(raw_payload, Mapping) else type(raw_payload).__name__,
+            (
+                list(raw_payload.keys())
+                if isinstance(raw_payload, Mapping)
+                else type(raw_payload).__name__
+            ),
         )
         if raw_payload is None:
             logger.debug("No command payload to publish")
@@ -819,6 +851,105 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
         # Unknown action type: best-effort pass-through (a mapping
         # that rclpy will coerce if the message supports it).
         return {"joints": list(joints)}
+
+    def _setup_camera_subscriptions(self, cfg: Ros2AdapterConfig) -> None:
+        """订阅相机图像话题并写入独立帧槽（相机推流专用）。"""
+        if not cfg.camera_subscriptions:
+            return
+        for stream_name, item in cfg.camera_subscriptions.items():
+            msg_type = self._resolve_message_type(item.msg_type)
+            store_as = item.store_as or stream_name
+            logger.info(
+                "Creating ROS2 camera subscription '%s': topic='%s', msg_type='%s', qos=%d, store_as='%s'",
+                stream_name,
+                item.topic,
+                item.msg_type,
+                item.qos,
+                store_as,
+            )
+            self._node.create_subscription(
+                msg_type,
+                item.topic,
+                self._build_camera_callback(store_as, item.msg_type),
+                item.qos,
+            )
+
+    def _build_camera_callback(
+        self, store_as: str, msg_type: str
+    ) -> Callable[[Any], None]:
+        """图像消息回调：解码为 BGR ndarray 并写帧槽。"""
+        import numpy as np  # noqa: F401
+
+        is_compressed = msg_type.endswith("CompressedImage")
+        is_image = msg_type.endswith("Image") or msg_type.endswith("sensor_msgs.msg.Image")
+
+        def _callback(msg: Any) -> None:
+            try:
+                if is_compressed:
+                    import cv2
+
+                    data = bytes(msg.data)
+                    arr = np.frombuffer(data, np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                elif is_image:
+                    import cv2
+
+                    raw = np.frombuffer(bytes(msg.data), np.uint8)
+                    enc = getattr(msg, "encoding", "") or ""
+                    height = int(msg.height)
+                    width = int(msg.width)
+                    n_bytes = height * width * 3
+                    if len(raw) < n_bytes:
+                        logger.debug(
+                            "ROS2 camera %s: short image data (%d < %d)",
+                            store_as, len(raw), n_bytes,
+                        )
+                        return
+                    frame = raw[:n_bytes].reshape(height, width, 3).copy()
+                    if enc.startswith("rgb") or enc == "bgr8":
+                        if enc.startswith("rgb"):
+                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        # bgr8 直接可用
+                    elif enc == "mono8":
+                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                    else:
+                        logger.debug(
+                            "ROS2 camera %s: unhandled encoding %r; using raw",
+                            store_as, enc,
+                        )
+                else:
+                    logger.warning(
+                        "ROS2 camera %s: unsupported msg_type %r",
+                        store_as, msg_type,
+                    )
+                    return
+                if frame is None or frame.ndim < 2:
+                    return
+                with self._lock:
+                    self._camera_frames[store_as] = frame
+                    self._camera_frame_ts[store_as] = time.monotonic()
+            except Exception:
+                logger.debug(
+                    "ROS2 camera %s decode failed", store_as, exc_info=True
+                )
+
+        return _callback
+
+    # ── ICameraFrameSource（相机推流共享帧槽） ──────────────────────────────
+
+    def get_latest_frame(self, camera_id: str) -> Optional[Any]:
+        """返回指定相机（按 store_as 匹配）的最近一帧 BGR 图像，无帧返回 None。
+
+        内部加锁并返回副本，避免与订阅回调写入竞争。
+        """
+        with self._lock:
+            frame = self._camera_frames.get(camera_id)
+            return None if frame is None else frame.copy()
+
+    def get_latest_timestamp(self, camera_id: str) -> float:
+        """返回最近一帧的采集时间戳（time.monotonic()），无帧返回 0.0。"""
+        with self._lock:
+            return self._camera_frame_ts.get(camera_id, 0.0)
 
     def _setup_subscriptions(self, cfg: Ros2AdapterConfig) -> None:
         if cfg.observation_sync.enabled and len(cfg.subscriptions) > 1:
@@ -1243,6 +1374,33 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
             )
         return subscriptions
 
+    def _parse_camera_subscriptions(
+        self, camera_subscriptions_cfg: Mapping[str, Any]
+    ) -> Dict[str, CameraSubscriptionConfig]:
+        camera_subscriptions: Dict[str, CameraSubscriptionConfig] = {}
+        for stream_name, raw_item in camera_subscriptions_cfg.items():
+            if not isinstance(raw_item, Mapping):
+                raise ValueError(
+                    "each ros2.camera_subscriptions item must be a mapping"
+                )
+            topic = str(raw_item.get("topic", "")).strip()
+            msg_type = str(
+                raw_item.get(
+                    "msg_type", "sensor_msgs.msg.Image"
+                )
+            ).strip()
+            if not topic:
+                raise ValueError(
+                    f"camera_subscriptions.{stream_name} requires topic"
+                )
+            camera_subscriptions[str(stream_name)] = CameraSubscriptionConfig(
+                topic=topic,
+                msg_type=msg_type,
+                qos=int(raw_item.get("qos", 10)),
+                store_as=str(raw_item.get("store_as", "")).strip(),
+            )
+        return camera_subscriptions
+
     def _parse_command_publishers(
         self, command_publishers_cfg: Mapping[str, Any]
     ) -> Dict[str, CommandPublisherConfig]:
@@ -1330,6 +1488,12 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
             )
 
         subscriptions = self._parse_subscriptions(subscriptions_cfg)
+        camera_subscriptions_cfg = self._normalize_optional_mapping(
+            ros2_cfg.get("camera_subscriptions", {}), "ros2.camera_subscriptions"
+        )
+        camera_subscriptions = self._parse_camera_subscriptions(
+            camera_subscriptions_cfg
+        )
         command_publishers = self._parse_command_publishers(command_publishers_cfg)
         command_services = self._parse_command_services(command_services_cfg)
         action_clients_cfg = self._normalize_optional_mapping(
@@ -1376,6 +1540,7 @@ class Ros2HardwareAdapter(IRobotHardwareAdapter):
             spin_timeout_sec=float(ros2_cfg.get("spin_timeout_sec", 0.05)),
             auto_spin=bool(ros2_cfg.get("auto_spin", True)),
             subscriptions=subscriptions,
+            camera_subscriptions=camera_subscriptions,
             command_publishers=command_publishers,
             command_services=command_services,
             action_clients=action_clients,

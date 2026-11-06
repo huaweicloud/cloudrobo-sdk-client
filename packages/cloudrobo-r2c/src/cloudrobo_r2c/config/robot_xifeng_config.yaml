@@ -1,0 +1,149 @@
+# 隙锋人形机器人 R2C SDK 适配配置（交付物 #1）
+#
+# 适配器已集成进 r2c_sdk 树：src/r2c_sdk/robots/xifeng/
+# class_path 指向该子包，无需再传 --hardware-class。
+#
+# 设备标识 device-id（华为命名约定 {型号英文}-robot-01，对齐示例 moz1-robot-01/jaka-robot-01）：
+#   - 连真华为云：由 bundle 的 device_info.json(robot_id) 决定，本文件不设 device-id
+#   - 本地联调：见 config/client_xifeng_local.yaml 的 device_id（默认 xifeng-robot-01）
+#
+# 用法 A：连真华为云（推荐生产路径，bundle 可以是 zip 也可以是解压目录）
+#   python -m cloudrobo_r2c.cloudroboclient \
+#       --bundle /path/to/cert_xxx \
+#       --robot-config config/robot_xifeng_config.yaml
+#
+# 用法 B：本地 zenoh peer 联调（与 examples/xifeng_mock_cloud.py 配套，不需要 bundle）
+#   python -m cloudrobo_r2c.cloudroboclient \
+#       --client-config config/client_xifeng_local.yaml \
+#       --robot-config config/robot_xifeng_config.yaml
+#
+# 本文件遵循 R2C SDK robot config schema v2.1，由 SDK 自带的 SyncRobotClient/
+# RobotFactory/ConfigurableDeviceTranslator 自动消费。
+
+schema_version: "v2.1"
+
+# ============ 运行时配置 ============
+runtime:
+  # 观测发布频率（也是控制循环频率）
+  publish_hz: 10.0
+  # 0 表示持续运行
+  max_duration_s: 0.0
+  # 发完 obs 后等 action 的超时（秒），超时会重新发 obs
+  action_response_timeout_s: 5.0
+  # 每个 action chunk 入队的最大 step 数（-1 = 全部入队）
+  max_enqueue_actions_per_chunk: -1
+  # chunk 对齐：新 chunk 到达时找到与最近一步最接近的关节，跳过中间的 leading steps
+  enable_action_chunk_alignment: false
+  heartbeat:
+    enabled: true
+    interval_ms: 5000
+    jitter_ms: 0
+    status: "ONLINE"
+    mode: "AUTO"
+
+# ============ 硬件适配器 ============
+# 走 entry_point 模式：通过 hardware.type: xifeng 加载 XifengHardwareAdapter
+# （它继承 VendorSDKHardwareAdapter，内部封装 robot_factory + dry_run 开关）。
+hardware:
+  type: "xifeng"
+  config:
+    # source: mock | real
+    #   mock - 合成数据，无需隙锋真机或 pypilot wheel
+    #   real - 调 pypilot.PilotSDK 直连隙锋机器人
+    source: "mock"
+
+    # dry_run: true 时只打印 observation/action 日志，不向真机下发动作。
+    # ⚠️ 接入真机首次联调务必保持 true，比对关节名/数据无误后再改为 false。
+    # （见 skills/r2c/references/r2c-custom-robot.md §7 测试流程）
+    dry_run: true
+
+    real:
+      robot_host: "192.168.1.100"
+      request_connection_ip: "192.168.1.100"
+      arm_local_ip: "192.168.1.10"
+      arm_ip: "192.168.1.200"
+      arm_port: 8080
+      left_arm_id: 1
+      right_arm_id: 2
+      joint_poll_hz: 30.0
+      # RGB 相机：目前隙锋**不支持 RGB 数据推流**，桥不采集图像（observation 只含关节+夹爪）。
+      # 未来若支持，可在此加 cameras 配置并在 robot_real 接入独立 USB/RTSP 抓帧。
+
+    mock:
+      max_joint_speed_rad_s: 1.5
+
+# ============ 设备 ↔ R2C 协议翻译器 ============
+translator:
+  type: "configurable"
+  task: "xifeng humanoid manipulation"
+
+# ============ 上行映射：robot.get_observation() → R2C Observations ============
+device_to_r2c:
+  task: "xifeng humanoid manipulation"
+  mappings:
+    # ----- joint_states.names（固定常量，左臂 7 + 右臂 7 = 14）-----
+    - target_key: "joint_states.names"
+      default:
+        - "left_arm_1"
+        - "left_arm_2"
+        - "left_arm_3"
+        - "left_arm_4"
+        - "left_arm_5"
+        - "left_arm_6"
+        - "left_arm_7"
+        - "right_arm_1"
+        - "right_arm_2"
+        - "right_arm_3"
+        - "right_arm_4"
+        - "right_arm_5"
+        - "right_arm_6"
+        - "right_arm_7"
+
+    # ----- joint_states.position：从 robot 扁平 dict 收 14 个值 -----
+    - target_key: "joint_states.position"
+      source_paths:
+        - "left_arm_1"
+        - "left_arm_2"
+        - "left_arm_3"
+        - "left_arm_4"
+        - "left_arm_5"
+        - "left_arm_6"
+        - "left_arm_7"
+        - "right_arm_1"
+        - "right_arm_2"
+        - "right_arm_3"
+        - "right_arm_4"
+        - "right_arm_5"
+        - "right_arm_6"
+        - "right_arm_7"
+      use_lookup_dotted: false
+
+    # ----- end_effector_states.names -----
+    - target_key: "end_effector_states.names"
+      default: ["left_gripper", "right_gripper"]
+
+    # ----- end_effector_states.position -----
+    - target_key: "end_effector_states.position"
+      source_paths: ["left_gripper", "right_gripper"]
+      use_lookup_dotted: false
+    # 注：目前不支持 RGB 数据推流，无 images.color.* 映射（observation 只含关节 + 夹爪）。
+
+# ============ 下行映射：R2C Actions → robot.send_action() 命令 dict ============
+# 注意：云端任意 client（包括我们自己测试用的 action_publisher / xifeng_cloud_adapter）
+# 发的 action joint_states.position 长度可能不是 14。
+# 因此这里**不用 source_index** —— 整个 list 透传给 robot.send_action()，
+# 由 XifengRobot 自己按顺序映射到关节名（前 N 个对应 ALL_ARM_JOINT_NAMES）。
+# 这样避免 ConfigMapper 在长度不够时抛 IndexError 挂掉控制循环。
+r2c_to_device:
+  mappings:
+    - target: "arm_positions"
+      source: "joint_states.position"
+      use_assign_dotted: false
+      required: false
+      default: []
+
+    - target: "gripper_positions"
+      source: "end_effector_states.position"
+      use_assign_dotted: false
+      required: false
+      default: []

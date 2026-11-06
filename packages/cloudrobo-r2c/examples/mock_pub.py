@@ -16,7 +16,7 @@ Examples:
     python examples/mock_pub.py --bundle /path/to/cert_xxx.zip --config examples/mock_pub_config.json
 
 Advanced explicit mode:
-    python examples/mock_pub.py --project-id test-tenant --device-id robot-01 --client-id mock-pub-01
+    python examples/mock_pub.py --project-id r2c --device-id local --client-id mock-pub-01
 """
 
 from __future__ import annotations
@@ -92,8 +92,8 @@ def parse_args() -> argparse.Namespace:
     )
     
     # Advanced: explicit ClientConfig mode
-    parser.add_argument("--project-id", type=str, default=None, help="Project ID")
-    parser.add_argument("--device-id", type=str, default=None, help="Device ID")
+    parser.add_argument("--project-id", type=str, default="r2c", help="Project ID")
+    parser.add_argument("--device-id", type=str, default="local", help="Device ID")
     parser.add_argument("--client-id", type=str, default=None, help="Client ID")
     parser.add_argument(
         "--endpoints",
@@ -143,7 +143,7 @@ def build_client(args: argparse.Namespace):
 
     if args.client_config:
         logger.info("Connecting with client_config: %s", args.client_config)
-        client_cfg = ClientConfig.from_yaml(args.client_config)
+        client_cfg = ClientConfig.from_yaml(args.client_config, args.project_id, args.device_id, args.client_id)
         return R2CClient.connect(client_cfg)
 
     if not args.project_id:
@@ -202,7 +202,7 @@ def build_image_ndarray(seq: int, width: int = 320, height: int = 240) -> np.nda
 def build_png_bytes_from_ndarray(
     seq: int, width: int = 320, height: int = 240
 ) -> bytes:
-    """������ ndarray������ cv2 ����Ϊ PNG bytes��"""
+    """输入为 ndarray，使用 cv2 编码为 PNG bytes。"""
     image = build_image_ndarray(seq=seq, width=width, height=height)
     ok, encoded = cv2.imencode(".png", image)
     if not ok:

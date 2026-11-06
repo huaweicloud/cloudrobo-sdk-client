@@ -173,6 +173,53 @@ class TranslatorConfig(_PermissiveModel):
     type: str = Field(min_length=1, description="Translator type identifier")
 
 
+# ── Camera Streaming ─────────────────────────────────────────────────────────
+
+
+class CameraStreamingConfig(_PermissiveModel):
+    """LiveKit camera streaming configuration (top-level ``camera_streaming``).
+
+    相机推流为可选能力：未配置本段（或 ``enabled: false``）时 SDK 不启动
+    推流服务。相机设备仍由硬件适配器独占持有，推流侧仅通过
+    ``ICameraFrameSource`` 读取共享帧槽，不直接打开设备。
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether to start the camera streaming service",
+    )
+    camera_device_map: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Camera orientation → device identifier mapping, e.g. "
+            "{front: video0, wrist: video3}. Values may be /dev/videoN "
+            "names, RealSense serials, or ROS topic names."
+        ),
+    )
+    default_width: int = Field(default=640, ge=16, description="Fallback width")
+    default_height: int = Field(default=480, ge=16, description="Fallback height")
+    default_fps: int = Field(default=20, ge=1, description="Fallback frame rate")
+    max_bitrate: int = Field(
+        default=300_000,
+        ge=0,
+        description="Per-track max bitrate in bps (LiveKit REMB)",
+    )
+    max_framerate: int = Field(
+        default=20, ge=1, description="LiveKit TrackPublishOptions max framerate"
+    )
+    connect_timeout: float = Field(
+        default=5.0, ge=0.0, description="wss connect timeout in seconds"
+    )
+    dynacast: bool = Field(default=True, description="Enable LiveKit dynacast")
+    jwt_renewal_min_window: int = Field(
+        default=60, ge=0, description="Minimum JWT renewal window in seconds"
+    )
+    auto_stop_on_no_viewer: bool = Field(
+        default=True,
+        description="Stop streaming when cloud notifies no-viewer timeout",
+    )
+
+
 class DeviceToR2CConfig(_PermissiveModel):
     """Upstream mapping: device observations → R2C Observations."""
 
@@ -211,3 +258,10 @@ class RobotConfig(_PermissiveModel):
     translator: TranslatorConfig
     device_to_r2c: DeviceToR2CConfig
     r2c_to_device: R2CToDeviceConfig
+    camera_streaming: Optional[CameraStreamingConfig] = Field(
+        default=None,
+        description=(
+            "Optional LiveKit camera streaming config; when absent, "
+            "camera streaming service is not started"
+        ),
+    )

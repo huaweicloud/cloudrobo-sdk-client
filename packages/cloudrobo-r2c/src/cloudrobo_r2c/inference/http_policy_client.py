@@ -110,10 +110,11 @@ class HTTPPolicyClient(IPolicyClient):
                 url=endpoint,
                 json=payload,
                 timeout=timeout,
+                verify=False
             )
             response.raise_for_status()
         except Exception as exc:
-            logger.error("HTTP inference request failed: %s", "; ".join(exc.args))
+            logger.error("HTTP inference request failed: %s", "; ".join(str(e_i) for e_i in exc.args ))
             raise exc
 
         return self._parse_response(response)

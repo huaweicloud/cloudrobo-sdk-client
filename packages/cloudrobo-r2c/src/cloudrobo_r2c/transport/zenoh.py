@@ -97,6 +97,19 @@ TOPIC_DEFINITIONS: Dict[str, TopicDefinition] = {
         message_type="heartbeats",
         relative_path="state/heartbeats",
     ),
+    # --- 相机推流相关（LiveKit WebRTC 视频流） ---
+    "job_command": TopicDefinition(
+        message_type="job_command",
+        relative_path="job/command",
+    ),
+    "camera_capability": TopicDefinition(
+        message_type="camera_capability",
+        relative_path="device/camera_capability",
+    ),
+    "token_renew_request": TopicDefinition(
+        message_type="token_renew_request",
+        relative_path="device/token_renew_request",
+    ),
 }
 
 
@@ -656,8 +669,6 @@ class ZenohTransport(ITransport):
         source: str,
         event: Any,
     ) -> None:
-        event_text = str(event)
-
         with self._state_lock:
             if self._conn_info.stage == ConnectionStage.CLOSED:
                 return
@@ -1148,7 +1159,9 @@ class ZenohTransport(ITransport):
     ) -> str:
         definition = TOPIC_DEFINITIONS.get(message_type)
         if definition is None:
-            raise ValueError(f"Unsupported message type for predeclare: {message_type!r}")
+            raise ValueError(
+                f"Unsupported message type for predeclare: {message_type!r}"
+            )
         return f"{project_id}/{device_id}/{definition.relative_path}"
 
     def _declare_callback_subscriber(

@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "CameraCommandProto";
+option java_multiple_files = false;
+
+// ============================================================================
+// Topic: {project_id}/{robot_id}/job/command
+// Direction: cloud -> edge (pilot-datacollector -> r2c-gateway -> Zenoh -> SDK)
+// Payload: CameraCommand message (JSON-over-Zenoh or protobuf)
+//
+// This message carries three command types on the same topic:
+//   1. CAMERA_START    — start camera streaming, includes JWT + wss URL
+//   2. CAMERA_STOP     — stop camera streaming
+//   3. RTC_TOKEN_RENEW — JWT renewal response, carries new JWT
+// ============================================================================
+
+message CameraCommand {
+  // Command type: "CAMERA_START" | "CAMERA_STOP" | "RTC_TOKEN_RENEW"
+  string command = 1;
+
+  // Camera orientation identifier.
+  // "all" | "front" | "left_front" | "right_front" | "wrist" | "left_wrist" | "right_wrist"
+  // Only used for CAMERA_START / CAMERA_STOP; default "all".
+  string camera_id = 2;
+
+  // Optional command tracking ID (for result correlation).
+  string command_id = 3;
+
+  // ── CAMERA_START fields ────────────────────────────────────────────────
+  // JWT token (RS256 signed by pilot-datacollector).
+  // Present for CAMERA_START and RTC_TOKEN_RENEW; empty for CAMERA_STOP.
+  string token = 4;
+
+  // wss URL for LiveKit Room connection.
+  // Example: "wss://cloudrobo-rtc...:443/rtc?access_token=<JWT>"
+  // Present for CAMERA_START; empty for CAMERA_STOP / RTC_TOKEN_RENEW.
+  string url = 5;
+
+  // LiveKit Room name, e.g. "camera-{device_id}".
+  // Present for CAMERA_START and RTC_TOKEN_RENEW; empty for CAMERA_STOP.
+  string room = 6;
+
+  // JWT validity duration in seconds (e.g. 3600).
+  // Present for CAMERA_START and RTC_TOKEN_RENEW.
+  int64 expires_in = 7;
+
+  // Renewal window in seconds before JWT expiry (e.g. 600).
+  // SDK sets a timer to renew at (expires_in - renewal_before) seconds after issuance.
+  // Present for CAMERA_START and RTC_TOKEN_RENEW.
+  int64 renewal_before = 8;
+}

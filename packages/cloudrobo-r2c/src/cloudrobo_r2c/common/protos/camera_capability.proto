@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "CameraCapabilityProto";
+option java_multiple_files = false;
+
+// ============================================================================
+// Topic: {project_id}/{robot_id}/device/camera_capability
+// Direction: edge -> cloud (SDK -> Zenoh -> r2c-gateway -> pilot-datacollector)
+// Payload: CameraCapabilityReport message
+//
+// The edge SDK enumerates local camera devices (V4L2 /dev/video*) on device
+// online and on configuration changes, then reports capabilities to the cloud.
+// The cloud stores this in the t_robot_camera_capability table.
+// ============================================================================
+
+message CameraCapability {
+  // Camera orientation identifier.
+  // One of: "front" | "left_front" | "right_front" | "wrist" | "left_wrist" | "right_wrist"
+  string camera_id = 1;
+
+  // Optional device name (e.g. "USB Camera 0").
+  string name = 2;
+
+  // Resolution string, e.g. "640x480".
+  string resolution = 3;
+
+  // Frame rate in frames-per-second, e.g. 20.
+  int32 fps = 4;
+
+  // Encoding format, e.g. "h264".
+  string codec = 5;
+}
+
+message CameraCapabilityReport {
+  // Device (robot) ID.
+  string device_id = 1;
+
+  // List of enumerated camera capabilities.
+  repeated CameraCapability cameras = 2;
+
+  // Report timestamp (epoch milliseconds).
+  int64 timestamp = 3;
+}

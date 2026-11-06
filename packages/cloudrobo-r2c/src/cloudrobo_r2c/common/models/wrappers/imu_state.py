@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 try:
     from ..generated import imu_state_pb2
 except Exception:
-    imu_state_pb2 = None
+    imu_state_pb2: Any = None  # type: ignore[no-redef]
 
 
 @dataclass

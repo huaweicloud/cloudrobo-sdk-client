@@ -12,19 +12,27 @@ message Heartbeat {
   // Timestamp of the heartbeat
   google.protobuf.Timestamp timestamp = 1;
 
-  // Source of the state message (e.g., "robot", "simulator", "edge_gateway")
+  // Source of the state message: publisher identity
+  // "{project_id}/{device_id}" (filled by the SDK from the session
+  // identity; e.g. "r2c/local").
   string source = 2;
 
   // System status (e.g., "RUNNING", "IDLE", "ERROR")
   string status = 3;
 
-  // Operation mode (e.g., "AUTONOMOUS", "MANUAL")
+  // Operation mode — one of AUTO / CONTROLLED / ASSISTED:
+  //   AUTO       remote control inactive (default)
+  //   CONTROLLED remote teleop takeover active (teleop_enter)
+  //   ASSISTED   assist takeover active (ASSIST_ENTER; takes priority
+  //              over CONTROLLED)
+  // Synced by the SDK on teleop/assist enter/exit commands.
   string mode = 4;
 
   // List of active error codes
   repeated int32 error_code = 5;
 
-  // Battery information
+  // Battery information; optional — omit the field entirely when
+  // unknown (proto3 message field: unset == not uploaded)
   BatteryStatus battery = 6;
 }
 

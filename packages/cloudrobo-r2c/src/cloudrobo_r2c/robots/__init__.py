@@ -19,6 +19,9 @@ __all__ = [
     "UR5eHardwareAdapter",
     "PlaybackRobotAdapter",
     "AdapterRegistry",
+    "S05HardwareAdapter",
+    "Q25HardwareAdapter",
+    "XifengHardwareAdapter",
     "RobotFactory",
 ]
 
@@ -29,7 +32,9 @@ _MODULE_MAP: dict[str, str] = {
     "DummyRobotHardwareAdapter": ".dummy_robot",
     "UR5eHardwareAdapter": ".ur5e",
     "PlaybackRobotAdapter": ".playback_adapter",
+    "S05HardwareAdapter": ".s05_hardware_adapter",
     "Q25HardwareAdapter": ".q25_hardware_adapter",
+    "XifengHardwareAdapter": ".xifeng",
 }
 
 

@@ -128,9 +128,22 @@ def validate_numeric_sequence(
     return normalized
 
 
-def validate_pose7d(value: Any, field_name: str, model_name: str) -> List[float]:
-    """Validate Pose7D-like payload (7 numeric elements) and return normalized floats."""
-    return validate_numeric_sequence(value, field_name, model_name, expected_length=7)
+def validate_pose(value: Any, field_name: str, model_name: str) -> List[float]:
+    """Validate pose payload and return normalized floats.
+
+    合并 validate_pose6d/validate_pose7d **6 元素**
+    （[x,y,z,Rx,Ry,Rz]）或 **7 元素**（xyz+quat Pose7D）皆合规，
+    按实际长度校验数值序列。
+    """
+    if not isinstance(value, list) or len(value) not in (6, 7):
+        raise ValidationError(
+            f"{model_name}: Field '{field_name}' must be a list of 6 "
+            f"[x,y,z,Rx,Ry,Rz] or 7 [x,y,z,qw,qx,qy,qz] numeric elements, "
+            f"got length {len(value) if hasattr(value, '__len__') else '?'}"
+        )
+    return validate_numeric_sequence(
+        value, field_name, model_name, expected_length=len(value)
+    )
 
 
 def normalize_proto_timestamp(value: Any, field_name: str, model_name: str) -> Any:

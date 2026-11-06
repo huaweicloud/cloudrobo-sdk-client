@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 try:
     from ..generated import joint_state_pb2
 except Exception:
-    joint_state_pb2 = None
+    joint_state_pb2: Any = None  # type: ignore[no-redef]
 
 
 @dataclass

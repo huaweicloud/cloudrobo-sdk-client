@@ -14,8 +14,8 @@ Recommended usage:
 
 Advanced explicit ClientConfig usage:
   python examples/heartbeat_publisher.py \
-      --project-id test-tenant \
-      --device-id robot-01 \
+      --project-id r2c \
+      --device-id local \
       --client-id robot-pub-01 \
       --mode peer
 """
@@ -43,8 +43,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     # Explicit ClientConfig mode
-    p.add_argument("--project-id", default=None, help="Project ID for explicit ClientConfig mode")
-    p.add_argument("--device-id", default=None, help="Device ID for explicit ClientConfig mode")
+    p.add_argument("--project-id", default="r2c", help="Project ID for explicit ClientConfig mode")
+    p.add_argument("--device-id", default="local", help="Device ID for explicit ClientConfig mode")
     p.add_argument(
         "--client-id",
         default=None,

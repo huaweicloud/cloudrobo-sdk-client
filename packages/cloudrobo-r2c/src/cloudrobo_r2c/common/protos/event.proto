@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "EventProto";
+option java_multiple_files = false;
+
+message Event {
+  // 数据来源标识，发布时由 _ensure_state_source 填充 "{project_id}/{device_id}"
+  string source = 1;
+
+  int64 timestamp = 2;
+
+  // 事件唯一标识（如 uuid；与云端对齐，2026-09 schema）
+  string event_id = 3;
+
+  repeated Metadata metadata = 4;
+}
+
+message Metadata {
+  // 事件摘要（原 code 字段更名，field number 不变）
+  string abstract = 1;
+
+  // 事件类别枚举值，类型为string。event为告警事件，alarm为普通告警
+  string type = 2;
+
+  // 事件级别枚举值。Critical, Major, Minor, Info
+  string severity = 3;
+
+  string content = 4;
+
+  int64 starts_at = 5;
+
+  int64 ends_at = 6;
+
+}

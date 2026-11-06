@@ -8,7 +8,7 @@ Q25 Ultra 四足机器人云端适配器示例.
     python examples/q25_cloud_adapter.py
     python examples/q25_cloud_adapter.py --bundle /path/to/cert_xxx.zip
     python examples/q25_cloud_adapter.py --bundle /path/to/unpacked_bundle_dir
-    python examples/q25_cloud_adapter.py --project-id test-tenant --device-id q25-robot-01
+    python examples/q25_cloud_adapter.py --project-id r2c --device-id local
     python examples/q25_cloud_adapter.py --duration 30
 """
 
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 # 默认配置
 ADAPTER_NAME = "Q25CloudAdapter"
-DEFAULT_PROJECT_ID = "test-tenant"
-DEFAULT_DEVICE_ID = "q25-robot-01"
+DEFAULT_PROJECT_ID = "r2c"
+DEFAULT_DEVICE_ID = "local"
 DEFAULT_CLIENT_ID = "q25-cloud-adapter"
 
 # Q25 关节名称 (12个关节: 4条腿 x 3个关节)
@@ -186,9 +186,9 @@ def build_session(args: argparse.Namespace):
     2. --client-config: 使用 YAML 配置文件
     3. 显式参数: --project-id, --device-id, --endpoint-role, --endpoints 等
 
-    云端适配器应使用 --endpoint-role listen (默认值):
-    - listen 模式: 监听连接，适合云端服务
+    云端适配器应使用 --endpoint-role connect (默认值):
     - connect 模式: 主动连接，适合边缘设备
+    - listen 模式: 监听连接，适合云端服务
     """
     # 方式1: Bundle 模式（推荐）
     if args.bundle:
@@ -198,7 +198,10 @@ def build_session(args: argparse.Namespace):
     # 方式2: YAML 配置文件模式
     if args.client_config:
         logger.info("[%s] 使用客户端配置连接: %s", ADAPTER_NAME, args.client_config)
-        client_config = ClientConfig.from_yaml(args.client_config)
+        client_config = ClientConfig.from_yaml(
+            args.client_config,
+            endpoint_role=getattr(args, "endpoint_role", "listen"),
+        )
         return R2CClient.connect(client_config)
 
     # 方式3: 显式参数模式
@@ -274,13 +277,13 @@ def build_parser(
     parser.add_argument("--device-id", type=str, default=default_device_id, help=help_device_id)
     parser.add_argument("--client-id", type=str, default=default_client_id, help=help_client_id)
 
-    # Endpoint role 配置 (云端适配器使用 "listen" 模式)
+    # Endpoint role 配置 (云端适配器默认 "listen"，未显式指定时失败自动降级 connect)
     parser.add_argument(
         "--endpoint-role",
         type=str,
         default="listen",
         choices=["connect", "listen"],
-        help="端点角色: connect (主动连接) 或 listen (监听模式, 云端适配器用)",
+        help="端点角色: listen (监听) 或 connect (主动连接)",
     )
     parser.add_argument(
         "--endpoints",
@@ -309,7 +312,7 @@ def build_parser(
     parser.add_argument(
         "--target-device-id",
         type=str,
-        default=None,
+        default="local",
         help="订阅目标设备 ID, 默认使用 --device-id",
     )
 

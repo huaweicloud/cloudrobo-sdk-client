@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from typing import Dict, Optional
 
 # Default key-to-command mapping.
@@ -58,9 +59,11 @@ class KeyboardCommandMapper:
             cmd = self._keymap.get(alt)
             if cmd is not None:
                 return str(cmd)
-        # Treat any whitespace-only input as pause_resume (includes
-        # full-width space U+3000 and other Unicode spaces).
-        if all(char.isspace() for char in key):
+        # Treat true "space" characters (Unicode Zs category: U+0020,
+        # full-width space U+3000, NBSP U+00A0, ...) as pause_resume.
+        # Control characters such as Enter (\r\n) and Tab (\t) are NOT
+        # spaces and must not trigger pause_resume.
+        if key and all(unicodedata.category(c) == "Zs" for c in key):
             return "pause_resume"
         return None
 

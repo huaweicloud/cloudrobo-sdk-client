@@ -246,7 +246,9 @@ class R2CClient:
         error: BaseException,
     ) -> str:
         """Build a user-facing configuration validation error message."""
-        detail = (info.last_error or str(error) or "unknown configuration error").strip()
+        detail = (
+            info.last_error or str(error) or "unknown configuration error"
+        ).strip()
         return f"Invalid client configuration: {detail}"
 
     @staticmethod

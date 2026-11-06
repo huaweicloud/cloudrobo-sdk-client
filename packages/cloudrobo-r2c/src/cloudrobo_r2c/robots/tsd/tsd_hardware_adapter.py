@@ -17,9 +17,9 @@
 
 常用启动命令：
 1. 真实机器人：
-   `python -m cloudrobo_r2c.cloudroboclient --project-id test --device-id tsd --client-config config/client_config.yaml --robot-config config/robot_tsd_config.yaml`
+   `python -m cloudrobo_r2c.cloudroboclient--robot-config config/robot_tsd_config.yaml`
 2. Dummy:
-   `python -m cloudrobo_r2c.cloudroboclient --project-id test --device-id tsd --client-config config/client_config.yaml --robot-config config/robot_tsd_dummy_config.yaml`
+   `python -m cloudrobo_r2c.cloudroboclient--robot-config config/robot_tsd_dummy_config.yaml`
 """
 
 from __future__ import annotations
@@ -505,6 +505,7 @@ class TSDHardwareAdapter(IRobotHardwareAdapter):
         logger.debug("[TSD] Mock state updated: %s", {k: v for k, v in self._mock_state.items() if k.startswith("joint")})
 
     # Dispatch table mapping command names to handler callables.
+    # Signature: Callable[[TSDHardwareAdapter, Dict[str, Any]], None]
     # To add a new command, write a handler method and add an entry below.
     _COMMAND_HANDLERS: ClassVar[Dict[str, "TSDHardwareAdapter._CommandHandler"]] = {
         "abort":          lambda self, p: self._h_simple(lambda: self._xapi.abort(self._handle), "[TSD] abort executed"),

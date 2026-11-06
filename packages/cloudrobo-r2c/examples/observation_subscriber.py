@@ -7,14 +7,14 @@ Core usage:
     python examples/observation_subscriber.py --bundle /path/to/cert_xxx.zip --visualize
 
 Optional override:
-    python examples/observation_subscriber.py --bundle /path/to/cert_xxx.zip --target-device-id robot-02
+    python examples/observation_subscriber.py --bundle /path/to/cert_xxx.zip --target-device-id local
 
 Compatible advanced usage:
     python examples/observation_subscriber.py \
-        --project-id test-tenant \
-        --device-id subscriber \
+        --project-id r2c \
+        --device-id local \
         --client-id cloud-monitor-01 \
-        --target-device-id robot-01 \
+        --target-device-id local \
         --mode peer
 
 Topic:
@@ -57,7 +57,7 @@ def build_client(args: argparse.Namespace):
     if not args.project_id:
         raise ValueError("project_id is required when --bundle is not provided")
 
-    resolved_device_id = args.device_id or "subscriber"
+    resolved_device_id = args.device_id or "local"
     resolved_client_id = args.client_id or "cloud-monitor-01"
     endpoints = parse_endpoints(args.endpoints)
 
@@ -180,13 +180,13 @@ def main() -> None:
     parser.add_argument(
         "--project-id",
         type=str,
-        default=None,
+        default="r2c",
         help="Project ID for explicit ClientConfig mode",
     )
     parser.add_argument(
         "--device-id",
         type=str,
-        default="subscriber",
+        default="local",
         help="Subscriber self device_id for explicit ClientConfig mode",
     )
     parser.add_argument(
@@ -204,14 +204,14 @@ def main() -> None:
     parser.add_argument(
         "--endpoint-role",
         type=str,
-        default="connect",
+        default="listen",
         choices=["connect", "listen"],
         help="Connection endpoint role for explicit ClientConfig mode, e.g. connect",
     )
     parser.add_argument(
         "--mode",
         type=str,
-        default="peer",
+        default="client",
         choices=["peer", "client"],
         help="Connection mode for explicit ClientConfig mode",
     )
@@ -219,7 +219,7 @@ def main() -> None:
     parser.add_argument(
         "--target-device-id",
         type=str,
-        default=None,
+        default="local",
         help="Optional subscription target device ID; in bundle mode defaults to bundle robot_id",
     )
     parser.add_argument(

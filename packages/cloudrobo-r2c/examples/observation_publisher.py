@@ -11,8 +11,8 @@ Recommended usage:
 
 Compatible advanced usage:
     python examples/observation_publisher.py \
-        --project-id test-tenant \
-        --device-id robot-01 \
+        --project-id r2c \
+        --device-id local \
         --client-id robot-pub-01 \
         --mode peer
 
@@ -78,6 +78,7 @@ def build_client(args: argparse.Namespace):
         device_id=args.device_id,
         client_id=resolved_client_id,
         endpoints=endpoints,
+        endpoint_role=args.endpoint_role,
         mode=args.mode,
     )
 
@@ -136,13 +137,13 @@ def main() -> None:
     parser.add_argument(
         "--project-id",
         type=str,
-        default=None,
+        default="r2c",
         help="Project ID for explicit ClientConfig mode",
     )
     parser.add_argument(
         "--device-id",
         type=str,
-        default=None,
+        default="local",
         help="Device ID for explicit ClientConfig mode",
     )
     parser.add_argument(
@@ -156,6 +157,13 @@ def main() -> None:
         type=str,
         default="",
         help="Comma-separated endpoints for explicit ClientConfig mode, e.g. tls/127.0.0.1:7447",
+    )
+    parser.add_argument(
+        "--endpoint-role",
+        type=str,
+        default="connect",
+        choices=["connect", "listen"],
+        help="Connection endpoint role for explicit ClientConfig mode, e.g. connect",
     )
     parser.add_argument(
         "--mode",

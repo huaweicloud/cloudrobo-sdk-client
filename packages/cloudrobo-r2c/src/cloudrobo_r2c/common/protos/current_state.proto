@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package r2c_sdk;
+
+option java_package = "com.huawei.cloudrobo.r2csdk.proto";
+option java_outer_classname = "RunTimeProto";
+option java_multiple_files = false;
+
+/**
+ * Robot runtime state upload
+ * Topic: {project_id}/{device_id}/runtime
+ */
+message CurrentState {
+  // 数据来源标识，发布时由 _ensure_state_source 填充 "{project_id}/{device_id}"
+  string source = 1;
+
+  int64 timestamp = 2;
+  // 即时位置："当前朝向;当前地理位置"（如 "270;上海世博展览馆"）。
+  // 朝向（度，[0,360)）从腰部最后一个关节读数推算（可配反向与偏移标定），
+  // 地理位置为静态配置（custom_config.devices.location）
+  string location = 3;
+
+  RuntimeJointStates joint_states = 4;
+
+  RuntimeEndEffectorStates end_effector_states = 5;
+
+  RuntimeEndEffectorPoses end_effector_poses = 6;
+}
+
+// 结构对齐 observation.proto 的 JointStates，并按接入需求扩展速度/角度/电流等
+message RuntimeJointStates {
+  // 内部标识
+  repeated string type = 1;
+  repeated string names = 2;
+  repeated float position = 3;
+  repeated float velocity = 4;
+  repeated float torque = 5;
+  repeated float acceleration = 6;
+  repeated float temperature = 7;
+  repeated float current = 8;
+}
+
+// 结构对齐 observation.proto 的 EndEffectorStates
+message RuntimeEndEffectorStates {
+  repeated string type = 1;
+  repeated string names = 2;
+  repeated float position = 3;
+  repeated float force = 4;
+}
+
+// 结构对齐 observation.proto 的 EndEffectorPoses，并按接入需求扩展速度/加速度/力
+message RuntimeEndEffectorPoses {
+  repeated string type = 1;
+  repeated string names = 2;
+  repeated RuntimePose pose = 3;
+  // 6 维: [vx, vy, vz, vRx, vRy, vRz]
+  repeated RuntimePose velocity = 4;
+  // 6 维: [ax, ay, az, aRx, aRy, aRz]
+  repeated RuntimePose acceleration = 5;
+  // 6 维力/力矩
+  repeated RuntimePose effort = 6;
+}
+
+// 通用位姿/向量（不强制维度），如 [tx,ty,tz,qx,qy,qz,qw] 或 [vx,...,vRz]
+message RuntimePose {
+  repeated float data = 1;
+}

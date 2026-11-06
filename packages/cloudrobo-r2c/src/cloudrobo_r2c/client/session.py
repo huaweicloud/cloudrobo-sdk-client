@@ -65,6 +65,9 @@ class R2CSession:
     _internal_decoders: List[H264Decoder] = field(
         default_factory=list, init=False, repr=False
     )
+    # 相机推流（LiveKit）：硬件适配器共享帧槽 + 推流管理器（懒加载）
+    _frame_source: Any = field(default=None, init=False, repr=False)
+    _camera_manager: Any = field(default=None, init=False, repr=False)
 
     _hb_loop: Optional[HeartbeatLoop] = None
     _hb_stats: HeartbeatReportStats = field(default_factory=HeartbeatReportStats)
@@ -410,6 +413,31 @@ class R2CSession:
             if self._hb_loop is loop:
                 self._hb_loop = None
 
+    def set_heartbeat_mode(self, mode: str) -> None:
+        """运行期切换心跳 mode（枚举 AUTO / CONTROLLED / ASSISTED）。
+
+        遥操进入 → CONTROLLED，退出 → AUTO（默认 AUTO）；辅助
+        接管 → ASSISTED，退出 → AUTO（优先级高于 CONTROLLED）。
+        由 ``_maybe_start_heartbeats`` 写入的 ``_heartbeat_state`` 支
+        撑；心跳未启用（无状态）时静默忽略。
+        """
+        if mode not in ("AUTO", "CONTROLLED", "ASSISTED"):
+            raise ValueError(
+                f"heartbeat mode must be one of AUTO / CONTROLLED / "
+                f"ASSISTED, got {mode!r}"
+            )
+        state = getattr(self, "_heartbeat_state", None)
+        if state is None:
+            logger.debug(
+                "set_heartbeat_mode(%r) ignored: heartbeats not started on "
+                "session %r",
+                mode,
+                type(self).__name__,
+            )
+            return
+        state["mode"] = mode
+        logger.info("heartbeat mode -> %s", mode)
+
     def get_state_report_stats(self, reset: bool = False) -> Dict[str, Any]:
         """Return stats for state reporting (heartbeats), optionally reset counters."""
         with self._hb_lock:
@@ -643,13 +671,100 @@ class R2CSession:
             model_or_bytes.source = f"{self.project_id}/{self.device_id}"
         return model_or_bytes
 
+    # ── 相机推流（LiveKit WebRTC） ───────────────────────────────────────────
+
+    def _set_frame_source(self, frame_source: Any) -> None:
+        """注入硬件适配器的共享帧槽（相机设备唯一持有者）。"""
+        self._frame_source = frame_source
+
+    @property
+    def camera_manager(self) -> Any:
+        """获取相机推流管理器（懒加载）。
+
+        需要硬件适配器实现 ICameraFrameSource 才能推流；未注入时
+        start_camera_streaming 将按资源不可用上报。
+        """
+        if self._camera_manager is None:
+            from cloudrobo_r2c.camera.camera_manager import CameraManager
+
+            self._camera_manager = CameraManager(
+                session=self,
+                frame_source=self._frame_source,
+            )
+        return self._camera_manager
+
+    def start_camera_streaming(
+        self,
+        adapter: Any = None,
+        camera_streaming_cfg: Any = None,
+    ) -> Any:
+        """启动相机推流服务（注入帧槽、订阅命令、上报能力）。
+
+        在 R2CSession 连接成功后调用，SDK 将：
+        0. 从硬件适配器获取 ICameraFrameSource（若适配器未实现则推流不可用）
+        1. 枚举本地相机并上报能力信息
+        2. 订阅 job/command topic 等待 CAMERA_START 等命令
+
+        命令结果和告警通过现有 EventManager 单例上报（event topic），
+        无需新增 publish 方法。
+
+        Args:
+            adapter: 硬件适配器（可选，需实现 ICameraFrameSource）。
+            camera_streaming_cfg: 相机推流配置（CameraStreamingConfig 或 dict）。
+        """
+        from cloudrobo_r2c.core.interfaces import ICameraFrameSource
+
+        frame_source = (
+            adapter if isinstance(adapter, ICameraFrameSource) else None
+        )
+        self._set_frame_source(frame_source)
+
+        mgr = self.camera_manager
+        if camera_streaming_cfg is not None and hasattr(mgr, "_cfg"):
+            mgr._cfg = mgr._normalize_cfg(camera_streaming_cfg)
+        mgr.initialize()
+        return mgr
+
+    def publish_camera_capabilities(
+        self,
+        cameras: List[Any],
+    ) -> None:
+        """上报相机能力信息（protobuf 序列化）。"""
+        from cloudrobo_r2c.common.models import CameraCapabilityReport
+
+        topic = f"{self.project_id}/{self.device_id}/device/camera_capability"
+        report = CameraCapabilityReport(
+            device_id=self.device_id,
+            cameras=list(cameras),
+            timestamp=_now_ms(),
+        )
+        self.transport.publish(topic, report.serialize())
+
+    def stop_camera_streaming(self) -> None:
+        """停止相机推流服务并释放资源。"""
+        if self._camera_manager is not None:
+            try:
+                self._camera_manager.cleanup()
+            finally:
+                self._camera_manager = None
+
     def close(self) -> None:
         """Actively release underlying connection and owned local resources."""
         start = time.perf_counter()
         try:
+            self.stop_camera_streaming()
+        except Exception as e:
+            logger.debug(
+                "stop_camera_streaming() failed during close(): %s",
+                type(e).__name__,
+            )
+
+        try:
             self.stop_heartbeats()
         except Exception as e:
-            logger.debug("stop_heartbeats() failed during close(): %s", type(e).__name__)
+            logger.debug(
+                "stop_heartbeats() failed during close(): %s", type(e).__name__
+            )
 
         # Release H264 codec resources: the shared encoder (lazily created by
         # publish_observations) and any decoders created internally by

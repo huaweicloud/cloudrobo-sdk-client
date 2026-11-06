@@ -421,7 +421,7 @@ class RobotFactory:
         warnings.warn(
             "hardware.type='custom' with class_path is deprecated. "
             "Register your adapter as an entry_point under the "
-            "'cloudrobo_r2c.adapters' group instead. "
+            "'r2c_sdk.adapters' group instead. "
             "See https://setuptools.pypa.io/en/latest/userguide/"
             "entry_point.html for details.",
             DeprecationWarning,
@@ -506,7 +506,7 @@ class RobotFactory:
             adapter_cfg.get("commands") if isinstance(adapter_cfg, Mapping) else None
         )
         if not isinstance(commands_config, Mapping):
-            return  # no commands configured — nothing to do
+            return  # no commands configured
 
         classes: dict = getattr(adapter, "_registered_command_classes", {})
 

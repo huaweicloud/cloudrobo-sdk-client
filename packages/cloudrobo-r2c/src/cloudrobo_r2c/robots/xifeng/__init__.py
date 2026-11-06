@@ -4,7 +4,7 @@
 ``RobotFactory`` 自动发现并加载。
 
 对外入口：``XifengHardwareAdapter``（通过 ``create_xifeng_adapter`` 工厂函数注册
-到 ``cloudrobo_r2c.adapters`` entry_point 组）。
+到 ``r2c_sdk.adapters`` entry_point 组）。
 """
 
 from cloudrobo_r2c.robots.xifeng.xifeng_adapter import XifengHardwareAdapter

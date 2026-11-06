@@ -13,7 +13,7 @@ Behavior
 Usage::
 
     python examples/q25_cloud_adapter.py
-    python examples/q25_cloud_adapter.py --project-id test-tenant --device-id q25-robot-01
+    python examples/q25_cloud_adapter.py --project-id r2c --device-id local
     python examples/q25_cloud_adapter.py --duration 30
 """
 
@@ -34,8 +34,8 @@ logger = logging.getLogger(__name__)
 
 ADAPTER_NAME = "Q25CloudAdapter"
 ENABLE_VISUALIZATION = False
-DEFAULT_PROJECT_ID = "test-tenant"
-DEFAULT_DEVICE_ID = "q25-robot-01"
+DEFAULT_PROJECT_ID = "r2c"
+DEFAULT_DEVICE_ID = "local"
 DEFAULT_CLIENT_ID = "q25-cloud-adapter"
 DEFAULT_ENDPOINTS = ["tcp/0.0.0.0:7447"]
 DEFAULT_ENDPOINT_ROLE = "listen"
@@ -97,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-id", type=str, default=DEFAULT_DEVICE_ID)
     parser.add_argument("--client-id", type=str, default=DEFAULT_CLIENT_ID)
     parser.add_argument("--endpoints", type=str, nargs="+", default=DEFAULT_ENDPOINTS)
-    parser.add_argument("--endpoint-role", type=str, default=DEFAULT_ENDPOINT_ROLE, choices=["listen", "auto"])
+    parser.add_argument("--endpoint-role", type=str, default=DEFAULT_ENDPOINT_ROLE, choices=["listen", "connect"])
     parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--visualize", "-v", action="store_true", help="Display camera images in real-time")
     return parser.parse_args()

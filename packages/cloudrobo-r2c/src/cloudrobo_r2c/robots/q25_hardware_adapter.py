@@ -11,18 +11,16 @@ responsible for two things only:
 
 Communication Protocol
 ----------------------
-1. On startup, send a ``call_method=reset`` observation.
-2. Wait for CloudAdapter to reply with an action carrying
-   ``call_method=reset`` and ``reset_status=0``.
-3. Thereafter, send ``call_method=infer`` observations.
-4. The observation's ``timestamp`` is taken from the ROS2 image message
+1. ``get_observation()`` returns the latest camera image (JPEG) along
+   with ``task_id`` and ``call_id`` metadata.
+2. ``send_action()`` receives the cloud action, extracts the trajectory
+   from ``pos_action``, and publishes it as a ``nav_msgs/Path`` message.
+3. The observation's ``timestamp`` is taken from the ROS2 image message
    header stamp, **not** generated locally.
-5. Block observation publishing until the CloudAdapter sends the next
-   action (i.e. only one outstanding infer at a time).
-6. Before forwarding the action to Q25, inject a ``timestamp`` field
+4. Before forwarding the action to Q25, inject a ``timestamp`` field
    carrying the previously-sent observation timestamp.
-7. Publish the modified action as a JSON string on the ROS2 trajectory
-   topic, then allow the next observation to be sent.
+5. Publish the modified action as a JSON string on the ROS2 trajectory
+   topic.
 
 ROS2 Trajectory Payload (``nav_msgs/Path``)
 -------------------------------------------
@@ -41,19 +39,21 @@ Configuration (``hardware.custom_config``)
     jpeg_quality: 90
     use_mock_image: false
     dry_run: true
+    task_id: 10
 """
 
 from __future__ import annotations
 
 import logging
-import random
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 
+from cloudrobo_r2c.common.utils import summarize_observation_for_log
 from cloudrobo_r2c.core.interfaces import IRobotHardwareAdapter
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,7 @@ DEFAULT_TRAJECTORY_TOPIC = "/track/cloud_trajectory"
 DEFAULT_IMAGE_WIDTH = 224
 DEFAULT_IMAGE_HEIGHT = 224
 DEFAULT_JPEG_QUALITY = 90
+DEFAULT_TASK_ID = 10
 
 # Trajectory constants
 TRAJECTORY_NUM_WAYPOINTS = 8
@@ -143,7 +144,9 @@ class _Q25RosNode(Node):
         )
 
         if self._use_mock_image:
-            logger.info("Mock image mode enabled — generating solid gray 224x224 images")
+            logger.info(
+                "Mock image mode enabled — generating solid gray 224x224 images"
+            )
             self._mock_counter = 0
             self._generate_mock_image()
             # Update mock image at ~10 Hz
@@ -162,7 +165,9 @@ class _Q25RosNode(Node):
             )
 
         # CvBridge (only needed for real ROS image decoding)
-        self._cv_bridge = CvBridge() if CvBridge is not None and not self._use_mock_image else None
+        self._cv_bridge = (
+            CvBridge() if CvBridge is not None and not self._use_mock_image else None
+        )
 
         logger.info(
             "Q25 ROS2 node initialised: image=%s trajectory=%s use_mock=%s",
@@ -352,12 +357,11 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
     Does **not** directly control the robot. Exchanges data between the
     CloudAdapter and the Q25 robot via ROS2 + R2C protocol.
 
-    State machine
-    -------------
-    INIT -> send reset obs -> wait for reset ack -> ready
-    READY -> send infer obs (timestamp from ROS2 image stamp)
-          -> wait for CloudAdapter action
-          -> inject timestamp, publish to ROS2
+    Cycle
+    -----
+    READY -> send observation (timestamp from ROS2 image stamp)
+          -> receive CloudAdapter action
+          -> inject timestamp, publish trajectory to ROS2
           -> loop back to READY
     """
 
@@ -372,16 +376,9 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
     _connected: bool = field(default=False, init=False, repr=False)
 
     # Protocol state
-    _call_id: float = field(default=0.0, init=False, repr=False)
+    _call_id: str = field(default="", init=False, repr=False)
+    _task_id: int = field(default=DEFAULT_TASK_ID, init=False, repr=False)
     _sent_obs_timestamp_ms: int = field(default=0, init=False, repr=False)
-    _reset_done: threading.Event = field(
-        default_factory=threading.Event, init=False, repr=False
-    )
-    _reset_sent: bool = field(default=False, init=False, repr=False)
-    _action_received: threading.Event = field(
-        default_factory=threading.Event, init=False, repr=False
-    )
-    _waiting_for_infer: bool = field(default=False, init=False, repr=False)
 
     # ------------------------------------------------------------------
     # IRobotHardwareAdapter
@@ -436,15 +433,17 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
         else:
             logger.info("Mock image mode — skipping camera frame wait")
 
-        self._call_id = random.random()
-        self._reset_sent = False
-        self._reset_done.clear()
-        self._waiting_for_infer = False
-        self._action_received.set()  # allow first obs to go through
+        # Generate a session-unique call_id (string, used as env_id)
+        self._call_id = str(uuid.uuid4())
+        self._task_id = int(self.config.get("task_id", DEFAULT_TASK_ID))
         self._sent_obs_timestamp_ms = 0
 
         self._connected = True
-        logger.info("Q25 adapter connected (call_id=%.6f)", self._call_id)
+        logger.info(
+            "Q25 adapter connected (call_id=%s, task_id=%d)",
+            self._call_id,
+            self._task_id,
+        )
 
     def disconnect(self) -> None:
         """Shut down ROS2 node and release resources."""
@@ -476,24 +475,15 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
         logger.info("Q25 adapter disconnected")
 
     def get_observation(self) -> Mapping[str, Any]:
-        """Return the latest observation, blocking if needed per protocol.
-
-        **Blocking behaviour**:
-        - If the previous infer obs has not yet been answered by an action
-          from the CloudAdapter, this method **blocks** until the action
-          arrives (via :meth:`send_action`).
-        - The first call sends a ``call_method=reset`` obs and blocks
-          until the CloudAdapter acknowledges the reset.
+        """Return the latest observation.
 
         Returns
         -------
         dict
             Keys:
-            - ``front``: JPEG bytes (for ``images.color.image`` mapping)
-            - ``call_method``: float, < 0.5 = reset, >= 0.5 = infer
-            - ``call_id``: float, session-unique ID
-            - ``task_id``: float, fixed to 10.0
-            - ``reset_status``: float, always 0.0
+            - ``front``: JPEG bytes (for ``images.color.front`` mapping)
+            - ``task_id``: int, task identifier (for ``extensions.task_id``)
+            - ``call_id``: str, session-unique ID (for ``extensions.env_id``)
         """
         self._ensure_connected()
 
@@ -502,68 +492,12 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
 
         jpeg_bytes, image_ts_ms = self._ros_node.get_image()
 
-        # ========================
-        if not self._reset_sent:
-            self._reset_sent = True
-            self._action_received.clear()
-
-            timestamp_ms = image_ts_ms if image_ts_ms > 0 else int(time.time() * 1000)
-            self._sent_obs_timestamp_ms = timestamp_ms
-
-            obs: Dict[str, Any] = {
-                "call_method": 0.0,
-                "call_id": self._call_id,
-                "task_id": 10.0,
-            }
-
-            if jpeg_bytes is not None:
-                obs["front"] = jpeg_bytes
-            else:
-                obs["front"] = _MINIMAL_JPEG
-
-            log_obs = {
-                k: (
-                    f"<{len(v)} bytes>"
-                    if k == "front" and isinstance(v, bytes)
-                    else v
-                )
-                for k, v in obs.items()
-            }
-            logger.info("[OBS RESET] timestamp=%d %s", timestamp_ms, log_obs)
-
-            # Return obs immediately WITHOUT blocking.
-            # SyncRobotClient will publish it, then cloud adapter sends reset ack
-            # back, and send_action() sets _reset_done to allow infer flow.
-            return obs
-
-        # ========================
-        # State: wait for reset ack before proceeding to infer
-        # ========================
-        if not self._reset_done.is_set():
-            logger.info("Waiting for CloudAdapter reset ack...")
-            self._action_received.wait()
-            logger.info("Reset ack received")
-
-        # ========================
-        # State: INFER (block until previous action is consumed)
-        # ========================
-        if self._waiting_for_infer:
-            logger.debug(
-                "Waiting for CloudAdapter action (last obs timestamp=%d)...",
-                self._sent_obs_timestamp_ms,
-            )
-            self._action_received.wait()
-            logger.debug("Action received, proceeding with next obs")
-
         timestamp_ms = image_ts_ms if image_ts_ms > 0 else int(time.time() * 1000)
         self._sent_obs_timestamp_ms = timestamp_ms
-        self._waiting_for_infer = True
-        self._action_received.clear()
 
-        obs = {
-            "call_method": 1.0,
+        obs: Dict[str, Any] = {
+            "task_id": self._task_id,
             "call_id": self._call_id,
-            "task_id": 10.0,
         }
 
         if jpeg_bytes is not None:
@@ -571,49 +505,39 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
         else:
             obs["front"] = _MINIMAL_JPEG
 
-        log_obs = {
-            k: (
-                f"<{len(v)} bytes>"
-                if k == "front" and isinstance(v, bytes)
-                else v
-            )
-            for k, v in obs.items()
-        }
-        logger.info("[OBS INFER] timestamp=%d %s", timestamp_ms, log_obs)
+        logger.info(
+            "[OBS] timestamp=%d %s",
+            timestamp_ms,
+            summarize_observation_for_log(obs),
+        )
 
         return obs
 
     def send_action(self, command: Mapping[str, Any]) -> None:
-        """Process an action from the CloudAdapter."""
+        """Process an action from the CloudAdapter.
+
+        Extracts the trajectory from ``pos_action`` (mapped from
+        ``extensions.vln_action``) and publishes it as a
+        ``nav_msgs/Path`` message to the ROS2 trajectory topic.
+        """
         self._ensure_connected()
 
         dry_run = self.config.get("dry_run", False)
 
-        # Parse trajectory from joint_states.position
-        joint_states = command.get("joint_states", {})
-        position = joint_states.get("position", []) if isinstance(joint_states, Mapping) else []
-
         # --- Log raw received action data ---
-        log_cmd = _summarize_mapping(command)
-        logger.info("[ACT RAW] %s", log_cmd)
+        logger.info("[ACT RAW] %s", summarize_observation_for_log(command))
 
-        # ========================
-        # Check for reset ack
-        # ========================
-        if self._try_handle_reset_ack(command):
-            return
+        # Extract trajectory from pos_action
+        pos_action = command.get("pos_action")
 
-        # ========================
-        # Normal infer action
-        # ========================
-        flat_positions = self._extract_flat_positions(position)
+        flat_positions = self._extract_flat_positions(pos_action)
         if flat_positions is None:
             return
 
         obs_timestamp = self._sent_obs_timestamp_ms
 
         logger.info(
-            "[ACT INFER] timestamp=%d waypoints=%d dry_run=%s",
+            "[ACT] timestamp=%d waypoints=%d dry_run=%s",
             obs_timestamp,
             len(flat_positions) // TRAJECTORY_DIMS,
             dry_run,
@@ -629,58 +553,19 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
             if self._ros_node is not None:
                 self._ros_node.publish_trajectory_path(waypoints, obs_timestamp)
 
-        # Unblock get_observation for the next cycle
-        self._waiting_for_infer = False
-        self._action_received.set()
-
-    def _try_handle_reset_ack(self, command: Mapping[str, Any]) -> bool:
-        """Check if the action is a reset acknowledgement and handle it.
-
-        Returns True if the action was handled as a reset ack (caller should return).
-        """
-        ee_states = command.get("end_effector_states", {})
-        if not isinstance(ee_states, Mapping):
-            return False
-        ee_position = ee_states.get("position", [])
-        if not ee_position or self._reset_done.is_set():
-            return False
-
-        ee_position_flat = self._flatten_position(ee_position)
-        call_method = float(ee_position_flat[0]) if len(ee_position_flat) > 0 else 0.0
-        reset_status = float(ee_position_flat[1]) if len(ee_position_flat) > 1 else 0.0
-
-        if call_method < 0.5 and reset_status == 0.0:
-            logger.info("[ACT RESET ACK] Reset acknowledged by CloudAdapter")
-            self._reset_done.set()
-            self._action_received.set()
-            return True
-        elif call_method < 0.5 and reset_status != 0.0:
-            logger.error("[ACT RESET FAILED] reset_status=%s", reset_status)
-            self._reset_sent = False
-            self._action_received.set()
-            return True
-
-        return False
-
-    def _extract_flat_positions(self, position: Any) -> Optional[list[float]]:
-        """Extract and validate flat position list from joint_states.position.
+    def _extract_flat_positions(self, pos_action: Any) -> Optional[list[float]]:
+        """Extract and validate flat position list from pos_action.
 
         Returns the flattened position list if valid, None otherwise.
         """
-        if not position or len(position) < TRAJECTORY_NUM_WAYPOINTS * TRAJECTORY_DIMS:
-            logger.debug(
-                "No valid trajectory in command: joint_states.position=%s", position
-            )
-            self._waiting_for_infer = False
-            self._action_received.set()
+        if not pos_action:
+            logger.debug("No pos_action in command, skipping")
             return None
 
-        flat_positions = self._flatten_position(position)
+        flat_positions = self._flatten_position(pos_action)
 
-        if len(flat_positions) < TRAJECTORY_NUM_WAYPOINTS * TRAJECTORY_DIMS:
+        if len(flat_positions) < TRAJECTORY_DIMS:
             logger.debug("Insufficient trajectory data: %d values", len(flat_positions))
-            self._waiting_for_infer = False
-            self._action_received.set()
             return None
 
         return flat_positions
@@ -702,7 +587,10 @@ class Q25HardwareAdapter(IRobotHardwareAdapter):
                 logger.info(
                     "[DRY_RUN] Waypoint %d: x=%.3f, y=%.3f, sin=%.3f, cos=%.3f",
                     i // TRAJECTORY_DIMS,
-                    pt[0], pt[1], pt[2], pt[3],
+                    pt[0],
+                    pt[1],
+                    pt[2],
+                    pt[3],
                 )
 
     # ------------------------------------------------------------------
@@ -735,35 +623,3 @@ def _make_placeholder_jpeg(
 
 
 _MINIMAL_JPEG = _make_placeholder_jpeg()
-
-
-# ---------------------------------------------------------------------------
-# Logging helper — summarize mapping for log (images show byte count only)
-# ---------------------------------------------------------------------------
-
-
-def _summarize_mapping(mapping: Mapping[str, Any], _depth: int = 0) -> Mapping[str, Any]:
-    """Recursively summarise a mapping for logging; images show ``<N bytes>``."""
-    if _depth > 5:
-        return {"...": "..."}
-    result: Dict[str, Any] = {}
-    for k, v in mapping.items():
-        if isinstance(v, bytes):
-            result[k] = f"<{len(v)} bytes>"
-        elif isinstance(v, Mapping):
-            result[k] = _summarize_mapping(v, _depth + 1)
-        elif isinstance(v, (list, tuple)):
-            if v and isinstance(v[0], (list, tuple)):
-                result[k] = [
-                    _summarize_mapping({"item": x}, _depth + 1)["item"]
-                    if isinstance(x, Mapping)
-                    else (f"<{len(x)} floats>" if len(x) > 10 else x)
-                    for x in v
-                ]
-            elif len(v) > 10:
-                result[k] = f"<{len(v)} floats>"
-            else:
-                result[k] = v
-        else:
-            result[k] = v
-    return result

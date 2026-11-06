@@ -106,39 +106,7 @@ class LeRobotPolicyRunner:
 
     def infer(self, features: Mapping[str, Any]) -> Mapping[str, Any]:
         # 1. 准备数据：类型转换 (uint8 -> float32) 和 形状转换 (HWC -> CHW)
-        def _prepare_data(val: Any) -> Any:
-            if isinstance(val, Mapping):
-                return {k: _prepare_data(v) for k, v in val.items()}
-            
-            if isinstance(val, np.ndarray):
-                if val.ndim == 3 and val.shape[-1] in (1, 3, 4):
-                    val = np.transpose(val, (2, 0, 1))
-                if val.dtype == np.uint8:
-                    return val.astype(np.float32) / 255.0
-                if val.dtype == np.float64:
-                    return val.astype(np.float32)
-                return val
-
-            if torch.is_tensor(val):
-                if val.ndim == 3 and val.shape[-1] in (1, 3, 4):
-                    val = val.permute(2, 0, 1)
-                if val.dtype == torch.uint8:
-                    return val.float() / 255.0
-                if val.dtype == torch.float64:
-                    return val.float()
-                return val
-
-            if isinstance(val, (list, tuple)):
-                try:
-                    arr = np.array(val)
-                    if arr.dtype in (np.float64, np.int64, np.int32):
-                        return arr.astype(np.float32)
-                except Exception as exc: 
-                    logger.exception("Failed convert to ndarray: %s", exc)
-
-            return val
-
-        prepared: Any = _prepare_data(features)
+        prepared: Any = self._prepare_data(features)
 
         # 1.5. 扁平化嵌套 observation：ConfigDrivenMapper 使用 assign_dotted
         # 将 "observation.state" 写入为 {"observation": {"state": ...}}，
@@ -151,61 +119,121 @@ class LeRobotPolicyRunner:
             prepared = self._apply_preprocessor(prepared)
 
         # 3. 增加 Batch 维度 (unsqueeze) 并推送到设备 (GPU/CPU)
-        def _batch_and_to_device(data: Any, target_device: str) -> Any:
-            if isinstance(data, Mapping):
-                return {k: _batch_and_to_device(v, target_device) for k, v in data.items()}
-            if isinstance(data, (list, tuple)):
-                return type(data)(_batch_and_to_device(v, target_device) for v in data)
-            if isinstance(data, np.ndarray):
-                data = torch.from_numpy(data)
-            if torch.is_tensor(data):
-                # 核心修复：在这里加上 batch_size = 1 的维度
-                return data.unsqueeze(0).to(target_device)
-            return data
+        prepared = self._batch_and_to_device(prepared)
 
-        prepared = _batch_and_to_device(prepared, self._device)
-
-        # 4. 模型推理
+        # 4. 模型推理 (含 chunk 截取)
         with torch.no_grad():
-            # 优先尝试获取完整的动作序列 (ACT 等模型支持 predict_action_chunk)
-            if hasattr(self._policy, "predict_action_chunk"):
-                output = self._policy.predict_action_chunk(prepared)
-            elif hasattr(self._policy, "select_action"):
-                output = self._policy.select_action(prepared)
-            else:
-                output = self._policy(prepared)
-
-            # 根据配置截取指定长度的 chunk
-            if self._action_chunk_size is not None and self._action_chunk_size > 0:
-                # 处理 Tensor 格式 (通常形状为 [batch_size, chunk_size, action_dim])
-                if torch.is_tensor(output) and output.ndim == 3:
-                    output = output[:, :self._action_chunk_size, ...]
-                # 处理 Dict 格式
-                elif isinstance(output, Mapping) and "action" in output:
-                    action_tensor = output["action"]
-                    if torch.is_tensor(action_tensor) and action_tensor.ndim == 3:
-                        output["action"] = action_tensor[:, :self._action_chunk_size, ...]
+            output = self._run_policy(prepared)
+            output = self._truncate_action_chunk(output)
 
         # 5. 移除 Batch 维度 (squeeze)，恢复为单步数据结构
-        def _unbatch(data: Any) -> Any:
-            if isinstance(data, Mapping):
-                return {k: _unbatch(v) for k, v in data.items()}
-            if isinstance(data, (list, tuple)):
-                return type(data)(_unbatch(v) for v in data)
-            if torch.is_tensor(data):
-                # 如果第 0 维是 1 (也就是我们刚刚加的 batch_size)，将其去掉
-                if data.ndim > 0 and data.shape[0] == 1:
-                    return data.squeeze(0)
-                return data
-            return data
-
-        output = _unbatch(output)
+        output = self._unbatch(output)
 
         # 6. 后处理及标准化输出
         if self._postprocessor is not None:
             output = self._postprocessor(output)
 
         return self._normalize_output(output, torch)
+
+    @staticmethod
+    def _prepare_data(val: Any) -> Any:
+        """Type conversion (uint8 -> float32) and shape conversion (HWC -> CHW)."""
+        if isinstance(val, Mapping):
+            return {k: LeRobotPolicyRunner._prepare_data(v) for k, v in val.items()}
+        if isinstance(val, (list, tuple)):
+            return LeRobotPolicyRunner._prepare_list(val)
+        if isinstance(val, np.ndarray):
+            return LeRobotPolicyRunner._prepare_array(val)
+        if torch.is_tensor(val):
+            return LeRobotPolicyRunner._prepare_tensor(val)
+        return val
+
+    @staticmethod
+    def _prepare_list(val: Any) -> Any:
+        try:
+            arr = np.array(val)
+            if arr.dtype in (np.float64, np.int64, np.int32):
+                return arr.astype(np.float32)
+        except Exception as exc:
+            logger.exception("Failed convert to ndarray: %s", exc)
+        return val
+
+    @staticmethod
+    def _prepare_array(val: Any) -> np.ndarray:
+        val = LeRobotPolicyRunner._to_chw(val)
+        if val.dtype == np.uint8:
+            return val.astype(np.float32) / 255.0
+        if val.dtype == np.float64:
+            return val.astype(np.float32)
+        return val
+
+    @staticmethod
+    def _prepare_tensor(val: Any) -> Any:
+        val = LeRobotPolicyRunner._to_chw(val)
+        if val.dtype == torch.uint8:
+            return val.float() / 255.0
+        if val.dtype == torch.float64:
+            return val.float()
+        return val
+
+    @staticmethod
+    def _to_chw(val: Any) -> Any:
+        """Convert HWC (channels-first? no, HWC = height-width-channel) to CHW."""
+        if val.ndim == 3 and val.shape[-1] in (1, 3, 4):
+            if torch.is_tensor(val):
+                return val.permute(2, 0, 1)
+            return np.transpose(val, (2, 0, 1))
+        return val
+
+    def _batch_and_to_device(self, data: Any) -> Any:
+        """Add a leading batch dimension (unsqueeze) and move to the target device."""
+        if isinstance(data, Mapping):
+            return {
+                k: self._batch_and_to_device(v) for k, v in data.items()
+            }
+        if isinstance(data, (list, tuple)):
+            return type(data)(self._batch_and_to_device(v) for v in data)
+        if isinstance(data, np.ndarray):
+            data = torch.from_numpy(data)
+        if torch.is_tensor(data):
+            # 核心修复：在这里加上 batch_size = 1 的维度
+            return data.unsqueeze(0).to(self._device)
+        return data
+
+    def _run_policy(self, prepared: Any) -> Any:
+        """Dispatch to the policy API, preferring a full action chunk."""
+        # 优先尝试获取完整的动作序列 (ACT 等模型支持 predict_action_chunk)
+        if hasattr(self._policy, "predict_action_chunk"):
+            return self._policy.predict_action_chunk(prepared)
+        if hasattr(self._policy, "select_action"):
+            return self._policy.select_action(prepared)
+        return self._policy(prepared)
+
+    def _truncate_action_chunk(self, output: Any) -> Any:
+        """Truncate the action sequence to the configured chunk size."""
+        if self._action_chunk_size is None or self._action_chunk_size <= 0:
+            return output
+        # 处理 Tensor 格式 (通常形状为 [batch_size, chunk_size, action_dim])
+        if torch.is_tensor(output) and output.ndim == 3:
+            return output[:, : self._action_chunk_size, ...]
+        # 处理 Dict 格式
+        if isinstance(output, Mapping) and "action" in output:
+            action_tensor = output["action"]
+            if torch.is_tensor(action_tensor) and action_tensor.ndim == 3:
+                output["action"] = action_tensor[:, : self._action_chunk_size, ...]
+        return output
+
+    def _unbatch(self, data: Any) -> Any:
+        """Remove the leading batch dimension (squeeze) to restore single-step data."""
+        if isinstance(data, Mapping):
+            return {k: self._unbatch(v) for k, v in data.items()}
+        if isinstance(data, (list, tuple)):
+            return type(data)(self._unbatch(v) for v in data)
+        if torch.is_tensor(data):
+            # 如果第 0 维是 1 (也就是我们刚刚加的 batch_size)，将其去掉
+            if data.ndim > 0 and data.shape[0] == 1:
+                return data.squeeze(0)
+        return data
 
     def _apply_preprocessor(self, prepared: Any) -> Any:
         try:
@@ -606,8 +634,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--bundle", type=str, default=None)
     parser.add_argument("--client-config", default="config/client_config.yaml")
-    parser.add_argument("--project-id", type=str, default=None)
-    parser.add_argument("--device-id", type=str, default=None)
+    parser.add_argument("--project-id", type=str, default="r2c")
+    parser.add_argument("--device-id", type=str, default="local")
     parser.add_argument("--client-id", type=str, default=None)
     parser.add_argument("--endpoints", type=str, default="")
     parser.add_argument(
@@ -640,15 +668,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
-    # Resolve config paths against the config shipped inside the installed
-    # package, while still honoring explicit / source-checkout relative paths.
-    from cloudrobo_r2c.common.config_path import resolve_config_path
-
-    if args.client_config:
-        args.client_config = resolve_config_path(args.client_config)
-    if args.cloud_config:
-        args.cloud_config = resolve_config_path(args.cloud_config)
-
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",

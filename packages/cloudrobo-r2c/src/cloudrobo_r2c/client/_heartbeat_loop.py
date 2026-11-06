@@ -82,7 +82,7 @@ class HeartbeatLoop:
         self._last_good: Optional[Union[Heartbeat, Dict[str, Any], bytes]] = None
 
         self._last_publish_log_ts_ms: int = 0
-        self._publish_log_every_ms: int = 5000  
+        self._publish_log_every_ms: int = 5000
 
     def is_running(self) -> bool:
         t = self._thread
@@ -93,7 +93,9 @@ class HeartbeatLoop:
             raise RuntimeError("heartbeats already running")
 
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="r2c-heartbeats", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="r2c-heartbeats", daemon=True
+        )
         self._thread.start()
 
     def stop(self, timeout_s: float = 2.0) -> None:
@@ -144,7 +146,9 @@ class HeartbeatLoop:
 
         raise TypeError(f"provider returned unsupported type: {type(obj).__name__}")
 
-    def _fallback_from_last_good(self) -> Optional[Union[Heartbeat, Dict[str, Any], bytes]]:
+    def _fallback_from_last_good(
+        self,
+    ) -> Optional[Union[Heartbeat, Dict[str, Any], bytes]]:
         last = self._last_good
         if last is None:
             return None
@@ -160,7 +164,7 @@ class HeartbeatLoop:
                 )
                 return hb
             except Exception:
-                return last  
+                return last
 
         if isinstance(last, dict):
             data = dict(last)

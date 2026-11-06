@@ -4,7 +4,7 @@
 接入 R2C SDK 的 ``IRobotHardwareAdapter`` 统一接口。
 
 常用启动命令：
-``python -m cloudrobo_r2c.cloudroboclient --project-id test --device-id tsd --client-config config/client_config.yaml --robot-config config/robot_tsd_config.yaml``
+``python -m cloudrobo_r2c.cloudroboclient --project-id r2c --device-id local --client-config config/client_config.yaml --robot-config config/robot_tsd_config.yaml``
 """
 
 from __future__ import annotations
