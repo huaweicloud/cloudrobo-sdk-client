@@ -27,6 +27,7 @@ Install from PyPI:
 
 ```bash
 pip install hw-cloudrobo-client
+password:12
 ```
 
 After installation, the `cloudrobo` CLI tool is ready to use.
