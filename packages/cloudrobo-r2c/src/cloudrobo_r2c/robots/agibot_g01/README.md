@@ -221,4 +221,43 @@ python -m pytest packages/cloudrobo-r2c/tests/test_agibot_g01_adapter.py -v
 ```
 
 测试以假 `a2d_sdk` 模块覆盖连接生命周期、观测组装、动作分发、干运行与
-YAML→翻译器端到端链路，无需 GDK 环境。
+YAML→翻译器端到端链路，无需 GDK 环境（假模块定义在
+`tests/fake_a2d_sdk.py`，由 `tests/conftest.py` 在导入被测模块前安装）。
+
+## 9. 无真机运行（mock 适配器）
+
+`hardware.type: "agibot_g01_mock"`（entry point `agibot_g01_mock`）提供与真机
+适配器**接口完全一致**的内存仿真，用于无 GDK / 无真机环境跑通完整数据链路：
+
+- 观测组装、`state/current` 采集（`get_runtime`）、动作按 `joint_states.names`
+  的第 7/8 章路由、互斥与完整性校验、`ee_pose_channel` / `gripper_channel` /
+  `ee_pose_repr` 单选、`go_home` 复位命令——全部复用真机适配器实现
+- 底层 `AgiBotG01MockClient`：动作立即更新内存状态（无运动时间/限速），
+  关节与末端位姿状态独立维护（不做正运动学联动）；夹爪内部 `[0, 1]` 归一化，
+  `gripper_states` 返回 `[35, 120]` 原始量程（与 GDK 一致）；相机为合成渐变帧，
+  分辨率由 `camera_width` / `camera_height` 配置（默认 64×48）
+- **初始关节与末端位姿默认取自云端示例
+  `examples/agibot_g01_cloud_adapter.py`：双臂 14 关节 = `GROUP_A`（joint_a）
+  的目标关节角，末端位姿 = `GROUP_POSE_A`（pose_a）的 left/right 7 维位姿，
+  夹爪 = joint_a 的 `[0.15, 0.15]`**；灵巧手/头/腰初始零位，均可用
+  `hardware.config` 的 `initial_joints` / `initial_gripper` /
+  `initial_ee_poses` / `initial_hand` / `initial_head` / `initial_waist` /
+  `initial_body_pose` 覆盖
+
+```bash
+# 机器人端（mock；runtime.dry_run 默认 false，动作直接更新 mock 状态；
+# 只观察动作日志时把任一 dry_run 改回 true）
+cloudrobo r2c client \
+    --robot-config src/cloudrobo_r2c/config/robot_agibot_g01_mock_config.yaml
+
+# 云端侧：仍用真机样例（同一 zenohd 部署）
+python examples/agibot_g01_cloud_adapter.py --project-id r2c --device-id local
+```
+
+配套配置 `src/cloudrobo_r2c/config/robot_agibot_g01_mock_config.yaml` 与真机
+配置同构（仅 `hardware.type`、mock 初始状态与 dry_run 默认值不同）；
+`commands.go_home` 默认回到 joint_a 初始位姿。
+
+mock 适配器的单测见
+`packages/cloudrobo-r2c/tests/test_agibot_g01_mock_adapter.py`（初始基线、
+全量控制路由、`get_runtime`、配置 YAML→翻译器端到端等）。

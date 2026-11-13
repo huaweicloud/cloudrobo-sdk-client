@@ -745,13 +745,14 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
         client = self._require_client()
 
         if self._dry_run:
-            logger.info(
-                "[AgiBotG01][DRY_RUN] action dims: %s",
-                {
-                    key: len(AgiBotG01HardwareAdapter.as_float_list(value))
-                    for key, value in command.items()
-                },
-            )
+            dims: Dict[str, Any] = {}
+            for key, value in command.items():
+                try:
+                    dims[key] = len(AgiBotG01HardwareAdapter.as_float_list(value))
+                except (TypeError, ValueError):
+                    # joint_names 等非数值字段只报类型，避免 dry_run 日志崩溃
+                    dims[key] = f"non-numeric({type(value).__name__})"
+            logger.info("[AgiBotG01][DRY_RUN] action dims: %s", dims)
             return
         executed: List[str] = []
 

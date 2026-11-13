@@ -1,0 +1,324 @@
+# AgiBot G01（智元精灵 G01）mock 机器人配置
+#
+# 硬件适配器：cloudrobo_r2c.robots.agibot_g01.agibot_g01_mock_adapter
+# （内存仿真，不依赖 a2d_sdk / 真机 / 相机硬件；接口与真机适配器完全一致：
+#  RobotDds 状态查询与关节空间控制、RobotController 末端位姿/关节绝对位置控制、
+#  CosineCamera 相机图像）
+#
+# 初始状态默认取自云端示例 examples/agibot_g01_cloud_adapter.py：
+# - 双臂 14 关节 = GROUP_A（joint_a）目标关节角（弧度）
+# - 末端位姿   = GROUP_POSE_A（pose_a）的 left/right 7 维位姿
+# - 夹爪       = joint_a 的 [0.15, 0.15]（[0, 1] 归一化）
+# - 灵巧手 / 头部 / 腰部 = 零位
+# 可在 hardware.config 的 initial_* 键覆盖（见下）。
+#
+# 启动示例（无需 GDK 与真机）：
+#   cloudrobo r2c client --robot-config config/robot_agibot_g01_mock_config.yaml
+# 云端侧样例仍可用 examples/agibot_g01_cloud_adapter.py（同机部署 zenohd）。
+#
+# 安全提示：mock 动作只更新内存状态、无真机风险，因此 runtime.dry_run 与
+# hardware.config.dry_run 默认 false，便于跑通完整控制回路；如需只观察动作
+# 日志（mock 状态不变），将任一 dry_run 改为 true 即可。
+#
+# ★ 配置版本标记：config_rev: 2026-11-13-r1
+#   与真机配置 robot_agibot_g01_config.yaml（r3）同构，仅 hardware.type、
+#   hardware.config 的 mock 初始状态与 dry_run 不同。
+schema_version: "v2.1"
+
+runtime:
+  publish_hz: 30.0
+  max_duration_s: 0.0
+  action_response_timeout_s: 3.0
+  dry_run: false
+  heartbeat:
+    enabled: true
+    interval_ms: 5000
+    jitter_ms: 500
+  keyboard_control:
+    enabled: false
+  skip_initial_observations: 1
+
+hardware:
+  type: "agibot_g01_mock"
+  # ── state/current 发布绑定（runtime.current_state 废止，会话级周期
+  #    上报一并移除；轻量接入改走 hardware.topics 绑定，collector 为
+  #    adapter.get_runtime）───────────────────────────────────────────
+  topics:
+    "{project_id}/{device_id}/state/current":
+      proto: "cloudrobo_r2c.common.models:RunTimeMessage"
+      direction: "publish"
+      rate_hz: 10                    # 状态发布频率（10Hz）
+      collector: "get_runtime"
+  config:
+    # state/current 帧 location（"当前朝向;当前地理位置" 格式，可按需修改；
+    # mock 不做朝向推算，此处直接配置地理位置）
+    location: "广东深圳坂田基地E3实验室"
+    # ── mock 初始状态（默认 joint_a / pose_a，见文件头说明）──────────────
+    # 双臂 14 关节（弧度，左 7 + 右 7）
+    initial_joints: [
+      -1.125699520111084, 0.5228543281555176, 0.10490940511226654,
+      -1.283866286277771, 0.7302126884460449, 1.476741075515747,
+      -0.16992810368537903, 1.1257692575454712, -0.522889256477356,
+      -0.10499665141105652, 1.2836743593215942, -0.7302126884460449,
+      -1.495011329650879, 0.16991065442562103,
+    ]
+    # 夹爪 2 通道（[0, 1] 归一化，与 joint_a 同组）
+    initial_gripper: [0.15, 0.15]
+    # 末端位姿 [x, y, z, qx, qy, qz, qw]（pose_a 的 left/right）
+    initial_ee_poses:
+      left: [
+        0.45006241859210033, 0.34431358357149866, 1.0250712982705688,
+        0.11851912989635048, 0.6617943563342805, -0.6437205892683082,
+        0.3655205175154617,
+      ]
+      right: [
+        0.4481309242140103, -0.3455449250377566, 1.0226385863602234,
+        -0.6659388881998952, -0.12370331875302967, -0.3598052659951305,
+        0.6416876628662489,
+      ]
+    # 灵巧手 12 关节（弧度）
+    initial_hand: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # 头部 [yaw, pitch]（弧度）、腰部 [pitch(弧度), height(cm)]
+    initial_head: [0.0, 0.0]
+    initial_waist: [0.0, 0.0]
+    # 整体姿态关节状态（默认空数组；维度随整机配置，需与模型输入一致时再填）
+    # ── 末端位姿/夹爪观测发布位置（观测与 state/current 同一选择，单选互斥，
+    #    不可同时发）───────────────────────────────────────────────────
+    # ee_pose_channel: 末端位姿发到哪
+    #   end_effector_poses（默认，专用字段 names+pose）| joint_states（镜像，
+    #   left_pose_* 逐维镜像）
+    # gripper_channel: 末端夹爪发到哪
+    #   end_effector_states（默认，专用字段）| joint_states（镜像 left/right_gripper）
+    ee_pose_channel: "end_effector_poses"
+    gripper_channel: "end_effector_states"
+    # ee_pose_repr: 末端位姿角度表示（对 ee_pose_channel 的两种取值都生效）：
+    #   quat（默认，[x,y,z,rx,ry,rz,rw] 7 维）| euler（[x,y,z,roll,pitch,yaw]
+    #   6 维，ZYX；动作 ee 通道同时兼容 7 维 quat，euler 内部转 quat 下发）
+    ee_pose_repr: "quat"
+    # RobotDds 初始化等待秒数（mock 无资源需等待，默认 0）
+    init_wait_s: 0.0
+    # 相机开关与启用的 G01 相机通道（《指南》9.1：head / hand_left / hand_right /
+    # head_depth / *_fisheye 等）
+    camera_enabled: true
+    camera_group: ["head", "hand_left", "hand_right"]
+    # G01 通道名 → R2C 图像键（images.color.<key>；与 moz1 等适配器的命名约定一致）
+    camera_key_map:
+      head: "cam_high"
+      hand_left: "cam_left_wrist"
+      hand_right: "cam_right_wrist"
+    # mock 合成相机帧分辨率（像素；真机为设备原生分辨率）
+    camera_width: 64
+    camera_height: 48
+    # 相机取流线程轮询间隔（秒），默认 0.03 ≈ 30Hz
+    # camera_poll_interval_s: 0.03
+    # RobotController（末端位姿/关节控制；创建失败自动降级为仅RobotDds 关节控制）
+    # enable_motion_controller: true
+    # control_lifetime_s: 1.0         # RobotController 位姿/关节指令有效时间（秒）
+    # pose_control_group: ["left_arm", "right_arm"]
+    # ee_pose_repr: "quat"            # joint_states 位姿镜像的角度表示：
+    #                                 #   quat（left_pose_x/y/z/rx/ry/rz/rw）
+    #                                 #   euler（left_pose_x/y/z/roll/pitch/yaw，ZYX）
+    # 适配器级干运行：只打印动作不执行（与 runtime.dry_run 任一开启即生效；
+    # mock 无真机风险，默认 false 便于跑通控制回路）
+    dry_run: false
+    commands:
+      # 复位指令（keyboard_control / 命令系统可触发）：默认回到 joint_a 初始位姿
+      go_home:
+        type: "go_home"
+        arm_positions: [
+          -1.125699520111084, 0.5228543281555176, 0.10490940511226654,
+          -1.283866286277771, 0.7302126884460449, 1.476741075515747,
+          -0.16992810368537903, 1.1257692575454712, -0.522889256477356,
+          -0.10499665141105652, 1.2836743593215942, -0.7302126884460449,
+          -1.495011329650879, 0.16991065442562103,
+        ]
+        gripper_positions: [0.15, 0.15]
+
+translator:
+  type: "configurable"
+
+device_to_r2c:
+  task: "move dual arms to target position"
+  image_encoding: "jpeg"
+  mappings:
+    # --- 双臂 14 关节（左 7 + 右 7，弧度） ---
+    # 注意：同一 target 的多条规则须全部声明 list_mode（累加模式豁免重复校验）
+    - target_key: "joint_states.names"
+      default:
+        - "left_arm_joint1"
+        - "left_arm_joint2"
+        - "left_arm_joint3"
+        - "left_arm_joint4"
+        - "left_arm_joint5"
+        - "left_arm_joint6"
+        - "left_arm_joint7"
+        - "right_arm_joint1"
+        - "right_arm_joint2"
+        - "right_arm_joint3"
+        - "right_arm_joint4"
+        - "right_arm_joint5"
+        - "right_arm_joint6"
+        - "right_arm_joint7"
+      list_mode: extend
+
+    - target_key: "joint_states.position"
+      source: "joint_positions"
+      transforms: array_to_list
+      list_mode: extend
+
+    # --- 末端位姿镜像进 joint_states（仅当 hardware.config.ee_pose_channel:
+    #     "joint_states" 时适配器产出 ee_pose_names/ee_poses_flat；此时
+    #     end_effector_poses 不发位姿（单选互斥）。角度表示按 ee_pose_repr
+    #     单选：quat 每侧 7 维（left_pose_x/y/z/rx/ry/rz/rw）或 euler 每侧
+    #     6 维（left_pose_x/y/z/roll/pitch/yaw，ZYX）。joint_states.position
+    #     总维度 = 14 + 位姿段（quat 14 / euler 12）+ 夹爪段（gripper_channel
+    #     选 joint_states 时 2）——云端模型输入维度需按所选通道配置） ---
+    - target_key: "joint_states.names"
+      source_path: "ee_pose_names"
+      list_mode: extend
+      required: false
+
+    - target_key: "joint_states.position"
+      source_path: "ee_poses_flat"
+      list_mode: extend
+      required: false
+
+    # --- 末端夹爪（左、右 2 通道；发布位置由 hardware.config.gripper_channel
+    #     单选（默认 end_effector_states），与 joint_states 镜像互斥不可同时发；
+    #     names/position 仅在适配器产出对应字段时赋值） ---
+    - target_key: "end_effector_states.names"
+      source_path: "ee_gripper_names"
+      required: false
+
+    - target_key: "end_effector_states.position"
+      source: "gripper_positions"
+      transforms: array_to_list
+      required: false
+
+    - target_key: "end_effector_states.force"
+      default: []
+
+    # --- 末端夹爪镜像进 joint_states（仅当 hardware.config.gripper_channel:
+    #     "joint_states" 时适配器产出以下字段，此时 end_effector_states 不发夹爪） ---
+    - target_key: "joint_states.names"
+      source_path: "joint_gripper_names"
+      list_mode: extend
+      required: false
+
+    - target_key: "joint_states.position"
+      source: "joint_gripper_positions"
+      transforms: array_to_list
+      list_mode: extend
+      required: false
+
+    - target_key: "joint_states.velocity"
+      default: []
+
+    - target_key: "joint_states.torque"
+      default: []
+
+    # --- 末端位姿（get_motion_status frames，未就绪时字段缺省、自动跳过；
+    #     names 与 pose 从 ee_poses_data 整体赋值，避免部分触发生成不完整 dict） ---
+    - target_key: "end_effector_poses"
+      source_path: "ee_poses_data"
+      required: false
+
+    # --- 相机（色彩通道；深度通道可仿照增加 images.depth.* 映射） ---
+    - target_key: "images.color.cam_high"
+      source_path: "cam_high"
+      transforms: ndarray_to_jpeg
+      required: false
+
+    - target_key: "images.color.cam_left_wrist"
+      source_path: "cam_left_wrist"
+      transforms: ndarray_to_jpeg
+      required: false
+
+    - target_key: "images.color.cam_right_wrist"
+      source_path: "cam_right_wrist"
+      transforms: ndarray_to_jpeg
+      required: false
+
+    # --- 头部 / 腰部 / 灵巧手 / 整体姿态 → extensions（float32 一维数组） ---
+    - target: "extensions.head_joint"
+      source_path: "head_joint_positions"
+      extension:
+        dtype: FLOAT32
+        shape: [2]
+      required: false
+
+    - target: "extensions.waist_joint"
+      source_path: "waist_joint_positions"
+      extension:
+        dtype: FLOAT32
+        shape: [2]
+      required: false
+
+    - target: "extensions.hand_joint"
+      source_path: "hand_joint_positions"
+      extension:
+        dtype: FLOAT32
+        shape: [12]
+      required: false
+
+    # 整体姿态（body_pose）维度随整机配置变化，且 extension shape 不支持变长（-1），
+    # 默认不映射；现场确认维度后可仿照 head_joint 增加（dtype FLOAT32, shape: [维度]）。
+
+r2c_to_device:
+  mappings:
+    # joint_states.names → 路由依据：适配器逐维解析 names 区分第 7/8 章控制：
+    # left_arm_joint_N/right_arm_joint_N → move_arm（按名回填）；
+    # left_pose_x/y/z + rx/ry/rz/rw（四元数）或 roll/pitch/yaw（欧拉角，ZYX）
+    # → 末端位姿；left_gripper/right_gripper → move_gripper；
+    # 全部为部位组名（left_arm/right_arm 等，每组 7 关节）→ RobotController 关节控制
+    - target: "joint_names"
+      source: "joint_states.names"
+      use_assign_dotted: false
+      required: false
+
+    # --- 双臂/位姿主控制（joint_states.position 全量，按 names 逐维解析） ---
+    - target: "arm_cmd_joint_pos"
+      source: "joint_states.position"
+      use_assign_dotted: false
+      required: false
+
+    # --- 夹持器控制（2 通道；joint_states 内 left_gripper/right_gripper 优先） ---
+    - target: "gripper_cmd_pos"
+      source: "end_effector_states.position"
+      slice_start: 0
+      slice_end: 2
+      use_assign_dotted: false
+      required: false
+
+    # --- 灵巧手 / 头部 / 腰部 / 底盘（可选：云端经 Actions.extensions 下发，缺失自动跳过） ---
+    - target: "hand_cmd_joint_pos"
+      source: "extensions.hand_joint"
+      use_assign_dotted: false
+      required: false
+
+    - target: "head_cmd_joint_pos"
+      source: "extensions.head_joint"
+      use_assign_dotted: false
+      required: false
+
+    - target: "waist_cmd_joint_pos"
+      source: "extensions.waist_joint"
+      use_assign_dotted: false
+      required: false
+
+    - target: "wheel_cmd_speed"
+      source: "extensions.wheel_cmd"
+      use_assign_dotted: false
+      required: false
+
+    # --- 末端位姿通道二：《指南》8.1 set_end_effector_pose_control（来自 end_effector_poses；
+    #     joint_states 含 left_pose/right_pose 位姿时适配器优先使用 joint_states 的位姿） ---
+    - target: "left_pose_cmd_ee"
+      source: "end_effector_poses.left.pose"
+      use_assign_dotted: false
+      required: false
+
+    - target: "right_pose_cmd_ee"
+      source: "end_effector_poses.right.pose"
+      use_assign_dotted: false
+      required: false

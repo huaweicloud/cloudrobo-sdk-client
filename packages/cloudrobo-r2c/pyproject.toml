@@ -102,6 +102,7 @@ a1z = "cloudrobo_r2c.robots.a1z_hardware_adapter:create_a1z_adapter"
 s05 = "cloudrobo_r2c.robots.s05_hardware_adapter:create_s05_adapter"
 xifeng = "cloudrobo_r2c.robots.xifeng.xifeng_adapter:create_xifeng_adapter"
 agibot_g01 = "cloudrobo_r2c.robots.agibot_g01.agibot_g01_hardware_adapter:create_agibot_g01_adapter"
+agibot_g01_mock = "cloudrobo_r2c.robots.agibot_g01.agibot_g01_mock_adapter:create_agibot_g01_mock_adapter"
 
 [project.entry-points."r2c_sdk.protos"]
 # Third-party protos may be registered by name; SDK-bundled protos use
