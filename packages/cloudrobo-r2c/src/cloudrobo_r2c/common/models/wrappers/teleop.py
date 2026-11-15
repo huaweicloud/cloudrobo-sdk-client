@@ -16,8 +16,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from google.protobuf.json_format import MessageToDict
-
 from .observations import EndEffectorPoses, EndEffectorStates
 
 logger = logging.getLogger(__name__)
@@ -47,11 +45,15 @@ _COMMAND_FIELDS = ("start", "pause", "resume", "finish", "quit")
 
 
 def _parse_command(data: Dict[str, Any]) -> Optional[str]:
-    """从 dict 中识别会话命令（{"start": {...}} → "start"）。"""
+    """从 dict 中识别会话命令（{"start": {}} → "start"）。
+
+    JSON 里 ``"start": {}`` 表示命令存在，``null`` 表示无命令；
+    其余类型（bool/str/数字）视为无效载荷并 fail-fast。
+    """
     for name in _COMMAND_FIELDS:
         if name in data and data[name] is not None:
             payload = data[name]
-            if payload is False or isinstance(payload, dict):
+            if isinstance(payload, dict):
                 return name
             raise ValueError(
                 f"TeleopFrame command {name!r} must be an object ({{}}) "
