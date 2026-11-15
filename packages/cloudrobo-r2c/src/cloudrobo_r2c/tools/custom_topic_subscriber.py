@@ -19,6 +19,11 @@
         --topic-name "{project_id}/{device_id}/command" \
         --topic-proto cloudrobo_r2c.common.models:CommandMessage \
         --topic-data '{"timestamp": 1700000000000, "command_type": "noop"}'
+
+示例（teleop 帧订阅，teleop.proto → TeleopFrame wrapper）：
+    python -m cloudrobo_r2c.tools.custom_topic_subscriber \
+        --topic-name "{project_id}/{device_id}/teleop/actions" \
+        --topic-proto cloudrobo_r2c.common.models:TeleopFrame --timeout 15
 """
 
 from __future__ import annotations

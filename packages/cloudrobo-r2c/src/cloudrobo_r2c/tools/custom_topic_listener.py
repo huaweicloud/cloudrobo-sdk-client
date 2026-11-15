@@ -6,13 +6,22 @@
 ``normalize_for_logging`` 缩略输出（shape/dtype/size）。
 
 - ``--topic-proto`` 可指定 wrapper（逗号分隔多个），缺省 ``auto`` 尝试
-  全部已知模型（RunTime/Command/Event/TaskProcess/Observations/Actions）。
+  全部已知模型（RunTime/Command/Event/TaskProcess/Observations/Actions/
+  TeleopFrame）。
 - ``--timeout`` 秒后自动退出（0 = 一直运行，Ctrl+C 停止）。
 - 连接方式与其他联调示例一致（--bundle 可选 / --endpoints / --mode）。
 
 示例（监听全部自定义 topic / 云侧 topic）：
     python -m cloudrobo_r2c.tools.custom_topic_listener \
         --project-id r2c --device-id local \
+        --endpoints tcp/127.0.0.1:7447 --endpoint-role connect \
+        --timeout 30
+
+示例（只监听 teleop topic）：
+    python -m cloudrobo_r2c.tools.custom_topic_listener \
+        --project-id r2c --device-id local \
+        --topic-name "{project_id}/{device_id}/teleop/**" \
+        --topic-proto cloudrobo_r2c.common.models:TeleopFrame \
         --endpoints tcp/127.0.0.1:7447 --endpoint-role connect \
         --timeout 30
 """
@@ -75,6 +84,8 @@ AUTO_WRAPPERS = [
     "cloudrobo_r2c.common.models:TaskProcessMessage",
     "cloudrobo_r2c.common.models:Observations",
     "cloudrobo_r2c.common.models:Actions",
+    # teleop 操作端帧（teleop.proto，命令帧 + 动作帧）
+    "cloudrobo_r2c.common.models:TeleopFrame",
     # 数据回流大屏（pb2 直引用，无 wrapper）
     "cloudrobo_r2c.common.models.generated.data_quality_overview_pb2:DataQualityOverview",
     "cloudrobo_r2c.common.models.generated.data_upload_progress_pb2:DataUploadProgress",

@@ -19,6 +19,12 @@ protobuf 序列化），将 ``--topic-data``（JSON）转换后发送到
         --topic-name "{project_id}/{device_id}/command" \
         --topic-proto cloudrobo_r2c.common.models:CommandMessage \
         --topic-data '{"timestamp": 1700000000000, "command_type": "noop"}'
+
+示例（teleop 帧发送，teleop.proto → TeleopFrame wrapper）：
+    python -m cloudrobo_r2c.tools.custom_topic_publisher \
+        --topic-name "{project_id}/{device_id}/teleop/actions" \
+        --topic-proto cloudrobo_r2c.common.models:TeleopFrame \
+        --topic-data '{"timestamp": 1700000000000, "operator_id": "op-1", "end_effector_poses": {"names": ["left"], "pose": [[0.1, 0.2, 0.3, 0, 0, 0, 1]]}}'
 """
 
 from __future__ import annotations
