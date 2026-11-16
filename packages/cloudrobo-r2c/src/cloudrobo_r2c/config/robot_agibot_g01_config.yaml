@@ -309,11 +309,11 @@ r2c_to_device:
 #   end_effector_poses.{names,pose}          未握持的手不进消息（缺失侧保持不动）
 #   end_effector_poses.<side>.pose           按 names 归一化的每侧位姿通道
 #   end_effector_states.{names,position}     每手触发值 0..1
-#   teleop_gripper_positions                 双手触发值组合 [left, right]
+#   end_effector_states.<side>.position      按侧归一化的触发值（左右分开）
 #   joint_states.{names,position}            预留（同构臂扩展）
 #   extensions.<key>                         手柄透传输入（已解码标量）
 # 规则语法与 r2c_to_device 完全一致（同一 MapperRule/transforms 引擎）。
-# 现场按 Pose7D 顺序 [x,y,z,qx,qy,qz,qw]（names left/right 时下标 0/1）；
+# 位姿为 7 维 [x,y,z,qx,qy,qz,qw]；左右臂完全分开：只出现一侧时只下发该侧。
 # 遥操语义由 SDK 执行路径保证：command 帧（teleop_command）不驱动设备、
 # 仅会话 RUNNING 且 session_id 匹配的动作帧才下发。
 teleop_to_device:
