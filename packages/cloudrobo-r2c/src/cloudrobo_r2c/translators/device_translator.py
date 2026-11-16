@@ -57,15 +57,21 @@ def _decode_extensions(mapping: Mapping[str, Any], source: Any) -> Dict[str, Any
     return result
 
 
-def _teleop_frame_to_mapping(frame: Any) -> Dict[str, Any]:
-    """TeleopFrame (or plain dict) -> mapping-rule payload.
+def _payload_to_mapping(payload: Any, source: Any) -> Dict[str, Any]:
+    """Action step / TeleopFrame -> mapping-rule payload (shared by both directions).
 
-    Reuses ``to_mapping`` for the dataclass -> dict conversion and
-    ``_decode_extensions`` for extension values, then normalizes per-side
-    channels by ``names`` so rules can address them like ``r2c_to_device``
-    sources (``end_effector_poses.left.pose``).
+    One normalization used by ``r2c_to_device`` and ``teleop_to_device``:
+
+    - ``to_mapping`` turns the dataclass (or plain dict) into a dict;
+    - ``_decode_extensions`` decodes ``ExtensionValue`` values (copy-on-read) and
+      keeps both flat and dot-grouped views, so ``extensions.left.stick.x`` works;
+    - ``_expand_by_name`` expands parallel ``names``/``values`` channels into
+      ``<section>.<side>.<field>`` (``end_effector_poses.left.pose``).
+
+    A flat ``Actions`` payload already carries the ``<side>.<field>`` keys, so the
+    expansions are additive there (rules keep addressing the same paths).
     """
-    mapping = _decode_extensions(to_mapping(frame), frame)
+    mapping = _decode_extensions(to_mapping(payload), source)
     extensions = mapping.get("extensions")
     if isinstance(extensions, Mapping):
         mapping["extensions"] = _nest_dotted(extensions)
@@ -206,8 +212,11 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         return Observations.from_dict(observation_dict)
 
     def r2c_to_device(self, action_step: Mapping[str, Any]) -> Any:
-        mapping = _decode_extensions(to_mapping(action_step), action_step)
-        return _drop_empty_targets(_apply_mapper(self._r2c_to_device_mapper, mapping))
+        return _drop_empty_targets(
+            _apply_mapper(
+                self._r2c_to_device_mapper, _payload_to_mapping(action_step, action_step)
+            )
+        )
 
     def teleop_to_device(self, frame: Any) -> Any:
         """Translate a TeleopFrame into a device command (plan B: reuse send_action).
@@ -220,7 +229,7 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         field, so the adapter holds that side at its current device value.
         """
         mapped = _apply_mapper(
-            self._teleop_to_device_mapper, _teleop_frame_to_mapping(frame)
+            self._teleop_to_device_mapper, _payload_to_mapping(frame, frame)
         )
         return _drop_empty_targets(mapped)
 

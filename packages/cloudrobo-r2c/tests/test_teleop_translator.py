@@ -254,7 +254,7 @@ def test_r2c_to_device_shares_extension_decoding_without_mutating_input():
 
 def test_extensions_decoded_for_rules():
     # extensions 值在映射前先 ext_decode，键按点分组可点路径查找
-    from cloudrobo_r2c.translators.device_translator import _teleop_frame_to_mapping
+    from cloudrobo_r2c.translators.device_translator import _payload_to_mapping
 
     config = {
         "translator": {"type": "configurable"},
@@ -272,7 +272,7 @@ def test_extensions_decoded_for_rules():
     translator = _translator(config)
     frame = TeleopFrame.from_dict({"timestamp": 1, "extensions": {"left.stick.x": 0.5}})
     assert translator.teleop_to_device(frame)["left_stick_x"] == pytest.approx(0.5)
-    assert _teleop_frame_to_mapping(frame)["extensions"]["left"]["stick"]["x"] == pytest.approx(0.5)
+    assert _payload_to_mapping(frame, frame)["extensions"]["left"]["stick"]["x"] == pytest.approx(0.5)
 
 
 def test_invalid_teleop_mapping_rule_fails_startup_validation():
