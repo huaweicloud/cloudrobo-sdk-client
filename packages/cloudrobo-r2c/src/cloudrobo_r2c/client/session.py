@@ -287,18 +287,6 @@ class R2CSession:
 
     # ── teleop 帧（teleop.proto → TeleopFrame，teleop/actions 话题）──────
 
-    def publish_teleop_actions(self, frame: Any) -> None:
-        """Publish a TeleopFrame to ``{project}/{device}/teleop/actions``.
-
-        ``frame`` 可为 ``TeleopFrame``（自动 ``serialize()``）或已编码 bytes。
-        """
-        from cloudrobo_r2c.common.models import TeleopFrame
-
-        topic = f"{self.project_id}/{self.device_id}/teleop/actions"
-        payload = frame.serialize() if isinstance(frame, TeleopFrame) else bytes(frame)
-        self.transport.publish(topic, payload)
-        logger.debug("Published teleop frame payload (%d bytes)", len(payload))
-
     def subscribe_teleop_actions(
         self,
         callback: Callable[[Any], None],
