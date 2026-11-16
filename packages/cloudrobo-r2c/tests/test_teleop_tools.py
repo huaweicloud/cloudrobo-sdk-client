@@ -281,6 +281,58 @@ def test_listener_still_detects_observations_and_actions():
     assert _best_wrapper_name(act_payload) == "Actions"
 
 
+# ── 话题名后缀预匹配（auto 模式先按话题锁定 wrapper）─────────────────
+
+
+@pytest.mark.parametrize(
+    "topic,expected",
+    [
+        ("r2c/local/teleop/actions", "TeleopFrame"),
+        ("r2c/local/teleop/commands", "TeleopFrame"),
+        ("r2c/local/inference/observations", "Observations"),
+        ("r2c/local/actions", "Actions"),
+        ("r2c/local/command", "CommandMessage"),
+        ("r2c/local/heartbeat", "Heartbeat"),
+        ("r2c/local/event", "EventMessage"),
+        ("r2c/local/state/current", None),
+        ("r2c/local", None),
+        ("", None),
+    ],
+)
+def test_topic_preferred_wrapper_name(topic, expected):
+    from cloudrobo_r2c.tools.custom_topic_listener import topic_preferred_wrapper_name
+
+    assert topic_preferred_wrapper_name(topic) == expected
+
+
+def test_prematch_maps_are_resolvable():
+    from cloudrobo_r2c.tools.custom_topic_listener import (
+        AUTO_WRAPPERS,
+        TOPIC_SUFFIX_WRAPPERS,
+        resolve_wrappers,
+    )
+
+    names = {n for n, _ in resolve_wrappers("auto")}
+    for topic_key, wrapper_name in TOPIC_SUFFIX_WRAPPERS.items():
+        assert wrapper_name in names, (
+            f"pre-match entry {topic_key!r} → {wrapper_name!r} is not in AUTO_WRAPPERS"
+        )
+    assert any(p.endswith(":TeleopFrame") for p in AUTO_WRAPPERS)
+
+
+def test_prematch_decodes_colliding_payload():
+    # 预匹配的核心价值：载荷字段撞车时也能按话题正确解码。用一条会被
+    # 试解析误判的小帧（仅 timestamp，试解析下与其它消息同分）验证：
+    # 话题是 teleop/actions 时锁定 TeleopFrame 而非按得分抢。
+    from cloudrobo_r2c.tools.custom_topic_listener import topic_preferred_wrapper_name
+
+    payload = TeleopFrame.from_dict({"timestamp": 1700000000002}).serialize()
+    assert topic_preferred_wrapper_name("r2c/local/teleop/actions") == "TeleopFrame"
+    obj = TeleopFrame.from_protobuf(payload)
+    assert obj.timestamp == 1700000000002
+
+
+
 # ── pb2 直引用（decode 模式自动适配 Pb2MessageAdapter）───────────────
 
 

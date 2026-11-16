@@ -8,6 +8,11 @@
 - ``--topic-proto`` 可指定 wrapper（逗号分隔多个），缺省 ``auto`` 尝试
   全部已知模型（RunTime/Command/Event/TaskProcess/Observations/Actions/
   TeleopFrame）。
+- ``auto`` 模式先做**话题名后缀预匹配**：话题末两级命中预匹配表（如
+  ``teleop/actions`` → TeleopFrame）时直接按该 wrapper 解码，不再试
+  解析——载荷字段撞车也不会误判；未命中（如 ``/inference/observations``
+  之外的自定义话题）回退到试解析判别（roundtrip 长度差 + 非空字段得分）。
+  显式 ``--topic-proto`` 时不干预，完全按用户指定解码。
 - ``--timeout`` 秒后自动退出（0 = 一直运行，Ctrl+C 停止）。
 - 连接方式与其他联调示例一致（--bundle 可选 / --endpoints / --mode）。
 
@@ -90,6 +95,44 @@ AUTO_WRAPPERS = [
     "cloudrobo_r2c.common.models.generated.data_quality_overview_pb2:DataQualityOverview",
     "cloudrobo_r2c.common.models.generated.data_upload_progress_pb2:DataUploadProgress",
 ]
+
+# 话题名后缀 → wrapper 类名（auto 模式的预匹配表）。
+# 话题末段与次末段拼出的 key（如 teleop/actions → "actions/teleop"）命中
+# 时直接锁定对应 wrapper 解码，跳过试解析（载荷字段撞车也不再误判）；
+# 未命中再按原试解析逻辑（roundtrip 差值 + 得分）判别。新增条目时保持
+# "次末段/末段" 的顺序（末段在前更直观，含通配的多级话题写末两级）。
+TOPIC_SUFFIX_WRAPPERS = {
+    "actions/teleop": "TeleopFrame",
+    "commands/teleop": "TeleopFrame",
+    "observations": "Observations",
+    "actions": "Actions",
+    "command": "CommandMessage",
+    "event": "EventMessage",
+    "heartbeat": "Heartbeat",
+    "task_process": "TaskProcessMessage",
+    "joint_states": "RunTimeMessage",
+    "end_effector_states": "RunTimeMessage",
+    "end_effector_poses": "RunTimeMessage",
+}
+
+
+def topic_preferred_wrapper_name(topic: str) -> Optional[str]:
+    """按话题名后缀给出预匹配 wrapper 类名（无匹配返回 None）。
+
+    取话题末段与次末段拼 ``"末段/次末段"``：既命中 ``observations``
+    这类单级话题，也让 ``teleop/actions``（与 r2c 的 ``/actions``）
+    以 "actions/teleop" 区分开。
+    """
+    parts = [p for p in topic.strip("/").split("/") if p]
+    if not parts:
+        return None
+    last = parts[-1]
+    prev = parts[-2] if len(parts) >= 2 else ""
+    if prev:
+        hit = TOPIC_SUFFIX_WRAPPERS.get(f"{last}/{prev}")
+        if hit:
+            return hit
+    return TOPIC_SUFFIX_WRAPPERS.get(last)
 
 
 def parse_endpoints(raw: Optional[str]) -> List[str]:
@@ -210,6 +253,21 @@ def main() -> None:
     wrappers = resolve_wrappers(args.topic_proto)
     selector = TopicResolver(args.project_id, args.device_id).resolve(args.topic_name)
     logger.info("Listening %s | wrappers: %s", selector, [n for n, _ in wrappers])
+    by_name = dict(wrappers)
+    # 话题后缀预匹配（仅 auto 模式且表内命中时生效）；--topic-proto 显式
+    # 指定时尊重用户选择，不走预匹配。
+    preferred_name = (
+        topic_preferred_wrapper_name(selector)
+        if args.topic_proto.strip().lower() == "auto"
+        else None
+    )
+    if preferred_name and preferred_name in by_name:
+        logger.info(
+            "Topic suffix pre-match: %s → %s (payload decode skips trial-"
+            "parse; falls back to trial-parse only if decoding fails)",
+            selector,
+            preferred_name,
+        )
 
     client = build_client(args)
     count = {"n": 0}
@@ -217,19 +275,35 @@ def main() -> None:
     def _handler(payload: bytes) -> None:
         payload = bytes(payload)
         count["n"] += 1
-        # 判别：试解析 + roundtrip 长度差（误解析的重序列化长度必偏离）
-        # 主依据 roundtrip 差值，次依据非空字段得分。
-        best = None  # (roundtrip_diff, -score, name, obj)
-        for name, cls in wrappers:
+        # 判别：话题后缀预匹配优先（auto 且命中预匹配表时）；匹配上的
+        # wrapper 能解码就直接用，不再试解析——载荷字段撞车也不会误判。
+        # 未命中或解码失败时退回试解析：roundtrip 长度差（误解析的
+        # 重序列化长度必偏离）为主依据，非空字段得分为次。
+        preferred = by_name.get(preferred_name) if preferred_name else None
+        if preferred is not None:
             try:
-                obj = cls.from_protobuf(payload)
-                reser = obj.serialize()
+                obj = preferred.from_protobuf(payload)
+                best = (0, 0, preferred_name, obj)
             except Exception:
-                logger.debug("payload parse failed for %s", name, exc_info=True)
-                continue
-            cand = (abs(len(reser) - len(payload)), -_score(obj), name, obj)
-            if best is None or cand[:2] < best[:2]:
-                best = cand
+                logger.debug(
+                    "pre-matched %s failed to decode; falling back to trial-parse",
+                    preferred_name,
+                    exc_info=True,
+                )
+                best = None
+        else:
+            best = None
+        if best is None:  # (roundtrip_diff, -score, name, obj)
+            for name, cls in wrappers:
+                try:
+                    obj = cls.from_protobuf(payload)
+                    reser = obj.serialize()
+                except Exception:
+                    logger.debug("payload parse failed for %s", name, exc_info=True)
+                    continue
+                cand = (abs(len(reser) - len(payload)), -_score(obj), name, obj)
+                if best is None or cand[:2] < best[:2]:
+                    best = cand
         print(f"\n=== #{count['n']} key={selector} | {len(payload)} bytes ===")
         if best is None:
             print(f"<undecodable payload: tried {len(wrappers)} wrappers>")
