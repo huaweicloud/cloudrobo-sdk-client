@@ -117,6 +117,17 @@ class IDeviceTranslator(ABC):
     def r2c_to_device(self, action_step: Mapping[str, Any]) -> Any:
         raise NotImplementedError
 
+    @abstractmethod
+    def teleop_to_device(self, frame: Any) -> Any:
+        """Translate a ``TeleopFrame`` (``teleop/actions``) into a device command.
+
+        Plan B: the result feeds the hardware adapter's existing
+        ``send_action`` — no dedicated adapter interface.  A side absent from
+        the frame must produce no command field, so the adapter holds that
+        side at its current device value.
+        """
+        raise NotImplementedError
+
 
 class IModelTranslator(ABC):
     """Cloud translator: R2C observation <-> model IO."""

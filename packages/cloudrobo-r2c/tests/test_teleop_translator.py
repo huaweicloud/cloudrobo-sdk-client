@@ -231,6 +231,25 @@ def test_mapper_absent_without_section():
     assert _translator({"teleop_to_device": {}})._teleop_to_device_mapper is None
 
 
+def test_interface_requires_teleop_to_device():
+    """IDeviceTranslator 与 r2c_to_device 对称：teleop_to_device 是必需方法。"""
+    from cloudrobo_r2c.core.interfaces import IDeviceTranslator
+
+    class _LegacyOnly(IDeviceTranslator):
+        def device_to_r2c(self, raw_device_observation):
+            return None
+
+        def r2c_to_device(self, action_step):
+            return {}
+
+    with pytest.raises(TypeError):
+        _LegacyOnly()
+
+    translator = _translator({"translator": {"type": "configurable"}})
+    assert isinstance(translator, IDeviceTranslator)
+    assert callable(translator.teleop_to_device)
+
+
 def test_build_teleop_to_device_mapper_helper():
     from cloudrobo_r2c.translators import ConfigurableDeviceTranslator
 
