@@ -73,15 +73,9 @@ message TeleopFrame {
   //                                 button may publish it too
   //   <hand>.btn.thumbstick  bool   thumbstick press
   //   <hand>.stick.x/y       float  thumbstick axis, -1..1
-  // where <hand> is "left" or "right". Field 12 was the former flat
-  // raw_inputs message (removed 2026-11-15); do not reuse the number.
-  reserved 12;
-  reserved "raw_inputs";
+  // where <hand> is "left" or "right".
   map<string, ExtensionValue> extensions = 13;
 }
-
-// Removed 2026-11-15: the flat raw_inputs message is replaced by the
-// grouped extensions above.
 
 // Start carries no payload of its own: the input mode lives on the frame
 // (TeleopFrame.input_mode), so all lifecycle commands are empty messages.
