@@ -339,7 +339,7 @@ r2c_to_device:
       required: false
 
 # ── 遥操 → 设备（方案 B：复用适配器 send_action；可选段，缺失时执行路径
-#    回退函数式默认转换，见 translators/teleop_translator.py）────────────────
+#    回退函数式默认转换，见 translators/device_translator.py）────────────────
 # 源 dict 为 TeleopFrame 展开后的字段（teleop.proto，2026-11-16 版）：
 #   end_effector_poses.{names,pose}          未握持的手不进消息（缺失侧保持不动）
 #   end_effector_poses.<side>.pose           按 names 归一化的每侧位姿通道

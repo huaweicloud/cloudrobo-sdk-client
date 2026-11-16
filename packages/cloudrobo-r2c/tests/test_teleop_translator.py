@@ -1,6 +1,6 @@
 """Tests for the teleop frame → device command translation (plan B).
 
-``teleop/actions`` 上的 ``TeleopFrame`` 经 ``teleop_translator`` 转换为硬件
+``teleop/actions`` 上的 ``TeleopFrame`` 由 ``device_translator`` 转换为硬件
 适配器 ``send_action`` 接受的平铺字段（方案 B，复用 send_action，零新增
 适配器接口）。覆盖：
 
@@ -210,16 +210,16 @@ def test_mapper_absent_without_section():
 
 
 def test_build_teleop_to_device_mapper_helper():
-    from cloudrobo_r2c.translators import build_teleop_to_device_mapper
+    from cloudrobo_r2c.translators import ConfigurableDeviceTranslator
 
-    assert build_teleop_to_device_mapper({}) is None
-    mapper = build_teleop_to_device_mapper(_CUSTOM_CONFIG)
+    assert ConfigurableDeviceTranslator._build_teleop_to_device_mapper({}) is None
+    mapper = ConfigurableDeviceTranslator._build_teleop_to_device_mapper(_CUSTOM_CONFIG)
     assert mapper is not None
 
 
 def test_extensions_decoded_for_rules():
     # extensions 值在映射前先 ext_decode，键按点分组可点路径查找
-    from cloudrobo_r2c.translators import frame_to_mapping
+    from cloudrobo_r2c.translators.device_translator import _teleop_frame_to_mapping
 
     config = {
         "translator": {"type": "configurable"},
@@ -237,7 +237,7 @@ def test_extensions_decoded_for_rules():
     translator = _translator(config)
     frame = TeleopFrame.from_dict({"timestamp": 1, "extensions": {"left.stick.x": 0.5}})
     assert translator.teleop_to_device(frame)["left_stick_x"] == pytest.approx(0.5)
-    assert frame_to_mapping(frame)["extensions"]["left"]["stick"]["x"] == pytest.approx(0.5)
+    assert _teleop_frame_to_mapping(frame)["extensions"]["left"]["stick"]["x"] == pytest.approx(0.5)
 
 
 def test_invalid_teleop_mapping_rule_fails_startup_validation():
