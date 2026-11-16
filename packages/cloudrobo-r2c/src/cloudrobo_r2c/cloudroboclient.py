@@ -390,6 +390,14 @@ def _log_translator_summary(translator: Any, current_logger: Any) -> None:
                 transforms = _fmt_transforms(rule.transforms)
                 lines.append(f"    {rule.source}{idx} ---- {rule.target}{transforms}")
 
+        t2d = getattr(translator, "_teleop_to_device_mapper", None)
+        if t2d and getattr(t2d, "rules", None):
+            lines.append("  teleop_to_device mappings:")
+            for rule in t2d.rules:
+                idx = f"[{rule.source_index}]" if rule.source_index is not None else ""
+                transforms = _fmt_transforms(rule.transforms)
+                lines.append(f"    {rule.source}{idx} ---- {rule.target}{transforms}")
+
         lines.append("---------------------------------------------------------------------------------------")
         for line in lines:
             current_logger.info(line)
