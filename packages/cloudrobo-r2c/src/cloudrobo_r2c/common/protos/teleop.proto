@@ -32,16 +32,19 @@ message TeleopFrame {
   // Session ID (set on start, empty otherwise).
   string session_id = 3;
 
+  // Input mode of the session, set together with the start command (and
+  // carried on later frames too). Was TeleopStart.input_mode; promoted to
+  // the frame level so all four lifecycle commands are empty messages.
+  InputMode input_mode = 14;
+
   // Session lifecycle command. Only present on control frames;
-  // action frames leave this unset. Field 8 was the former TeleopQuit
-  // command (removed 2026-11-16); do not reuse the number.
-  reserved 8;
-  reserved "quit";
+  // action frames leave this unset.
   oneof command {
     TeleopStart start = 4;
     TeleopPause pause = 5;
     TeleopResume resume = 6;
     TeleopFinish finish = 7;
+    TeleopQuit quit = 8;
   }
 
   // Joint states. Mirrors action.proto's JointAction with the chunk-level
@@ -80,15 +83,15 @@ message TeleopFrame {
 // Removed 2026-11-15: the flat raw_inputs message is replaced by the
 // grouped extensions above.
 
-message TeleopStart {
-  // Current phase: always VR; isomorphic arm is future work.
-  InputMode input_mode = 1;
-}
+// Start carries no payload of its own: the input mode lives on the frame
+// (TeleopFrame.input_mode), so all lifecycle commands are empty messages.
+message TeleopStart {}
 
 // Empty payloads; presence in oneof selects the transition.
 message TeleopPause {}
 message TeleopResume {}
 message TeleopFinish {}
+message TeleopQuit {}
 
 // One time step of per-element values (action.proto's JointStateStep shape).
 // In teleop frames this is a single step (one chunk per frame), so it is not

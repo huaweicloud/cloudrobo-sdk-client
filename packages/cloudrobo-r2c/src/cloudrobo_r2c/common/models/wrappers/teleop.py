@@ -1,9 +1,13 @@
 """TeleopFrame wrapper: teleop.proto 的操作端帧模型。
 
-teleop.proto 是 teleop topic 的唯一 proto（复用 observation.proto 的
-共享类型，不修改它们）。命令帧（oneof command）走 RELIABLE，动作帧
+teleop.proto 是 teleop topic 的唯一 proto（只 import common.proto；位姿/
+触发值/关节用 teleop 专属消息，不复用 observation.proto）。命令帧
+（oneof command：start/pause/resume/finish/quit）走 RELIABLE，动作帧
 （末端位姿 + 夹爪/触发值）走 BEST_EFFORT；未握持的手其位姿与触发值
 不进消息——数据缺席即安全信号。
+
+会话输入模式（input_mode：vr/isomorphic）是帧级字段，随 start 设置并在
+后续帧继续携带；四个生命周期命令载荷均为空消息。
 
 原始手柄/主从臂输入（primary 按钮、摇杆按键与轴值）经 extensions 透传，
 键名按 ``<hand>.btn.primary`` / ``<hand>.btn.thumbstick`` /
@@ -102,11 +106,11 @@ class RawInputs:
 
 # 会话命令名 ↔ oneof 字段（proto: TeleopStart/Pause/Resume/Finish；
 # TeleopQuit 已于 2026-11-16 移除，field 8/"quit" 被 reserved）
-_COMMAND_FIELDS = ("start", "pause", "resume", "finish")
+_COMMAND_FIELDS = ("start", "pause", "resume", "finish", "quit")
 
-# 2026-11-15/16 从 proto 移除的旧顶层键：输入中出现即 fail-fast，
-# 提示按新协议构造（quit → 不再有；raw_inputs → extensions）
-_REMOVED_KEYS = ("quit", "raw_inputs")
+# 2026-11-15 从 proto 移除的旧顶层键：输入中出现即 fail-fast，
+# 提示按新协议构造（raw_inputs → extensions；quit 已于 2026-11-16 回归，不再是旧键）
+_REMOVED_KEYS = ("raw_inputs",)
 
 
 def _parse_command(data: Dict[str, Any]) -> Optional[str]:
@@ -140,9 +144,9 @@ class TeleopFrame:
     timestamp: int = 0
     operator_id: str = ""
     session_id: str = ""
-    # 会话命令名："start"/"pause"/"resume"/"finish"，动作帧为 None
+    # 会话命令名："start"/"pause"/"resume"/"finish"/"quit"，动作帧为 None
     command: Optional[str] = None
-    # start 命令的 input_mode："vr"（当前）/"isomorphic"（预留）
+    # 会话输入模式（帧级字段）：「vr」（当前）/「isomorphic」（预留）
     input_mode: str = "unspecified"
     joint_states: EndEffectorStates = field(default_factory=EndEffectorStates)
     end_effector_poses: EndEffectorPoses = field(default_factory=EndEffectorPoses)
@@ -155,11 +159,17 @@ class TeleopFrame:
         if not isinstance(data, dict):
             raise ValueError(f"TeleopFrame data must be a dict, got {type(data).__name__}")
         command = _parse_command(data)
-        # input_mode 挂在 TeleopStart 载荷内（proto: start.input_mode）
-        start_payload = data.get("start") or {}
-        input_mode = str(
-            start_payload.get("input_mode", "unspecified") if isinstance(start_payload, dict) else "unspecified"
-        ) or "unspecified"
+        # input_mode 是帧级字段（proto: TeleopFrame.input_mode = 14）；
+        # 兼容旧输入形态：也接受 {"start": {"input_mode": ...}}
+        raw_input_mode = data.get("input_mode")
+        if raw_input_mode is None:
+            start_payload = data.get("start") or {}
+            raw_input_mode = (
+                start_payload.get("input_mode")
+                if isinstance(start_payload, dict)
+                else None
+            )
+        input_mode = str(raw_input_mode or "unspecified")
         joint_states_data = data.get("joint_states") or {}
         joint_states = EndEffectorStates(
             names=list(joint_states_data.get("names", [])),
@@ -202,12 +212,10 @@ class TeleopFrame:
         pb = teleop_pb2.TeleopFrame()
         pb.ParseFromString(payload)
         which = pb.WhichOneof("command")
-        if which == "start":
-            # proto 枚举名 INPUT_MODE_VR → 简名 vr（与 to_protobuf 约定互逆）
-            enum_name = teleop_pb2.InputMode.Name(pb.start.input_mode)
-            input_mode = enum_name[len("INPUT_MODE_"):].lower()
-        else:
-            input_mode = "unspecified"
+        # input_mode 是帧级字段（proto 枚举名 INPUT_MODE_VR → 简名 vr，与
+        # to_protobuf 约定互逆）
+        enum_name = teleop_pb2.InputMode.Name(pb.input_mode)
+        input_mode = enum_name[len("INPUT_MODE_"):].lower()
         # end_effector_poses 为 map<hand, TeleopEndEffectorPose>：排序得到稳定的
         # names/pose 顺序（left 在 right 前，与 wrapper 契约一致）。
         pose_by_hand = {str(k): list(v.pose.data) for k, v in pb.end_effector_poses.pose.items()}
@@ -244,16 +252,16 @@ class TeleopFrame:
         pb.session_id = self.session_id
         if self.command is not None:
             getattr(pb, self.command).SetInParent()
-            if self.command == "start":
-                try:
-                    pb.start.input_mode = teleop_pb2.InputMode.Value(
-                        "INPUT_MODE_" + str(self.input_mode).upper()
-                    )
-                except ValueError as exc:
-                    raise ValueError(
-                        f"TeleopFrame input_mode {self.input_mode!r} is invalid; "
-                        f"expected one of: unspecified/vr/isomorphic"
-                    ) from exc
+        if self.input_mode != "unspecified":
+            try:
+                pb.input_mode = teleop_pb2.InputMode.Value(
+                    "INPUT_MODE_" + str(self.input_mode).upper()
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"TeleopFrame input_mode {self.input_mode!r} is invalid; "
+                    f"expected one of: unspecified/vr/isomorphic"
+                ) from exc
         pb.joint_states.names.extend(self.joint_states.names)
         pb.joint_states.position.data.extend(self.joint_states.position)
         pb.joint_states.torque.data.extend(self.joint_states.force)

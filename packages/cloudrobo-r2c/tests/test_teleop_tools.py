@@ -1,16 +1,18 @@
 """Tests for teleop.proto integration into the custom-topic tools.
 
-teleop.proto（teleop topic 唯一 proto，复用 observation.proto 的共享类型）
-经 ``TeleopFrame`` wrapper 接入 tools/custom_topic_listener（AUTO_WRAPPERS
-自动判别）与 custom_topic_subscriber / custom_topic_publisher
-（--topic-proto 指定）。pb2 由构建命令编译到 common/models/generated，
-不入库；本测试在 pb2 缺失时整体 skip。
+teleop.proto（teleop topic 唯一 proto）经 ``TeleopFrame`` wrapper 接入
+tools/custom_topic_listener（AUTO_WRAPPERS 自动判别）与
+custom_topic_subscriber / custom_topic_publisher（--topic-proto 指定）。
+pb2 由构建命令编译到 common/models/generated，不入库；本测试在 pb2
+缺失时整体 skip。
 
-proto 要点（2026-11-16 版）：oneof 命令为 start/pause/resume/finish
-（TeleopQuit 已移除，field 8/"quit" reserved）；原始手柄输入不再有平铺
+proto 要点（2026-11-16 最新版）：oneof 命令为 start/pause/resume/finish/quit
+（quit 回归，四个生命周期载荷均为空消息）；input_mode 提升为帧级字段
+（field 14），随 start 设置并在后续帧继续携带；原始手柄输入不再有平铺
 raw_inputs（field 12 reserved），改为 ``map<string, ExtensionValue>
 extensions = 13``，键名按 ``<hand>.btn.primary`` / ``<hand>.btn.thumbstick``
-/ ``<hand>.stick.x/y`` 分组。
+/ ``<hand>.stick.x/y`` 分组。位姿/触发值/关节用 teleop 专属消息
+（TeleopEndEffectorPoses map / TeleopStep），不复用 observation.proto。
 """
 
 from __future__ import annotations
@@ -18,7 +20,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from cloudrobo_r2c.common.models import TeleopFrame
 from cloudrobo_r2c.common.proto_registry import resolve_proto_class
 
@@ -118,37 +119,44 @@ def test_empty_command_frames(command):
     assert TeleopFrame.from_protobuf(payload).command == command
 
 
-def test_quit_command_removed():
-    # TeleopQuit 已于 2026-11-16 从 proto 移除（field 8/"quit" reserved）；
-    # wrapper 命令集不再包含 quit，输入出现 quit 即 fail-fast。
+def test_quit_command_present_again():
+    # 2026-11-16 后期：TeleopQuit 回归（field 8 = quit，空载荷），
+    # 与 start/pause/resume/finish 一样由 oneof 选择。
     from cloudrobo_r2c.common.models.wrappers.teleop import _COMMAND_FIELDS
 
-    assert "quit" not in _COMMAND_FIELDS
-    assert not hasattr(teleop_pb2.TeleopFrame(), "quit")
-    with pytest.raises(ValueError, match="removed"):
-        TeleopFrame.from_dict({"timestamp": 1, "operator_id": "op", "quit": {}}).serialize()
+    assert "quit" in _COMMAND_FIELDS
+    assert hasattr(teleop_pb2.TeleopFrame(), "quit")
+    payload = TeleopFrame.from_dict({"timestamp": 1, "operator_id": "op", "quit": {}}).serialize()
+    assert TeleopFrame.from_protobuf(payload).command == "quit"
 
 
 def test_input_mode_variants():
-    p = TeleopFrame.from_dict({"timestamp": 1, "start": {"input_mode": "isomorphic"}}).serialize()
+    # input_mode 为帧级字段（field 14），随 start 设置并在后续帧继续携带
+    p = TeleopFrame.from_dict(
+        {"timestamp": 1, "start": {}, "input_mode": "isomorphic"}
+    ).serialize()
     assert TeleopFrame.from_protobuf(p).input_mode == "isomorphic"
     p = TeleopFrame.from_dict({"timestamp": 1, "start": {}}).serialize()
     assert TeleopFrame.from_protobuf(p).input_mode == "unspecified"
+    # 后续帧（pause）同样携带 input_mode
+    p = TeleopFrame.from_dict(
+        {"timestamp": 1, "pause": {}, "input_mode": "vr"}
+    ).serialize()
+    assert TeleopFrame.from_protobuf(p).input_mode == "vr"
 
 
 def test_invalid_input_mode_raises():
     with pytest.raises(ValueError, match="input_mode"):
-        TeleopFrame.from_dict({"timestamp": 1, "start": {"input_mode": "bogus"}}).serialize()
+        TeleopFrame.from_dict({"timestamp": 1, "start": {}, "input_mode": "bogus"}).serialize()
 
 
 def test_removed_keys_fail_fast():
     # 平铺 raw_inputs 已从 proto 移除（field 12 reserved，改用 extensions）；
-    # 输入中出现顶层 raw_inputs / quit 即 fail-fast，提示按新协议构造。
-    for removed in ("raw_inputs", "quit"):
-        with pytest.raises(ValueError, match="removed"):
-            TeleopFrame.from_dict(
-                {"timestamp": 1, "operator_id": "op", removed: {"primary_left": True}}
-            ).serialize()
+    # 输入中出现顶层 raw_inputs 即 fail-fast，提示按新协议构造。
+    with pytest.raises(ValueError, match="removed"):
+        TeleopFrame.from_dict(
+            {"timestamp": 1, "operator_id": "op", "raw_inputs": {"primary_left": True}}
+        ).serialize()
 
 
 def test_extensions_scalar_and_explicit_forms():
