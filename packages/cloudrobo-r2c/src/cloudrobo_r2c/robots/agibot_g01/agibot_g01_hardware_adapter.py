@@ -1216,6 +1216,10 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
 
         ee 通道（``left/right_pose_cmd_ee``）按长度识别表示：7 维四元数或
         6 维欧拉角（ZYX，内部转四元数），与观测 ``ee_pose_repr`` 输出一致。
+
+        ``control_group`` 按**实际下发的侧**裁剪：只给右侧时只控制
+        ``right_arm``——否则 GDK 会把未给位姿的一侧也纳入位姿控制
+        （表现为"只让右臂跟随，左臂也动了"）。
         """
         left = self._pose_from_dims(poses_by_side.get("left"), "left")
         right = self._pose_from_dims(poses_by_side.get("right"), "right")
@@ -1227,14 +1231,30 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
         if left is None and right is None:
             return []
 
+        control_group = self._pose_control_group_for(left is not None, right is not None)
         client.set_end_effector_pose(
             lifetime=self._control_lifetime_s,
-            control_group=self._pose_control_group,
+            control_group=control_group,
             left_pose=self._pose_to_dict(left) if left else None,
             right_pose=self._pose_to_dict(right) if right else None,
         )
         sides = [side for side, pose in (("left", left), ("right", right)) if pose is not None]
         return ["ee_pose(" + "/".join(sides) + ")"]
+
+    def _pose_control_group_for(self, has_left: bool, has_right: bool) -> List[str]:
+        """按实际下发的侧裁剪位姿控制组（只右 → 只含 right_arm）。"""
+        if has_left and has_right:
+            return list(self._pose_control_group)
+        present_side = "left" if has_left else "right"
+        arm_group = f"{present_side}_arm"
+        if arm_group not in self._pose_control_group:
+            return [arm_group]
+        # 保留非臂组名（如自定义部位），只丢弃未下发的臂
+        return [
+            group
+            for group in self._pose_control_group
+            if group == arm_group or group not in ("left_arm", "right_arm")
+        ]
 
     def _pose_list_to_quat(self, value: Any, key: str) -> Optional[List[float]]:
         """ee 通道位姿 list → 7 维 quat（接受 7 维 quat / 6 维 euler ZYX）。

@@ -727,6 +727,24 @@ def test_route_pose_via_joint_states_names():
     assert not any(c[0] == "move_arm" for c in _last_robot().calls)
 
 
+def test_route_pose_single_side_trims_control_group():
+    """只给右侧位姿时 control_group 只含 right_arm（否则左臂也会被控制）。"""
+    adapter = _connect()
+    adapter.send_action({"right_pose_cmd_ee": RIGHT_POSE})
+    _, control_group, left_pose, right_pose = _last_controller().pose_calls[0]
+    assert control_group == ["right_arm"]
+    assert left_pose is None
+    assert right_pose == pytest.approx(
+        {"x": 0.2, "y": 0.0, "z": 0.3, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": -1.0}
+    )
+
+    adapter = _connect()
+    adapter.send_action({"left_pose_cmd_ee": LEFT_POSE})
+    _, control_group, left_pose, right_pose = _last_controller().pose_calls[0]
+    assert control_group == ["left_arm"]
+    assert right_pose is None
+
+
 def test_route_pose_euler_names_converted_to_quaternion():
     # 欧拉角表示（roll/pitch/yaw，ZYX）：适配器内部转换为四元数下发
 
