@@ -13,16 +13,14 @@ from cloudrobo_r2c.core.internal.helpers import next_global_observation_id, to_m
 
 logger = logging.getLogger(__name__)
 
-# teleop.proto reuses observation.proto EndEffectorPoses/EndEffectorStates:
-# names are left/right (arm suffixes accepted as aliases).
+# teleop.proto names end-effector channels by hand: left/right (arm suffixes
+# accepted as aliases).
 _SIDE_ALIASES = {
     "left": "left",
     "right": "right",
     "left_arm": "left",
     "right_arm": "right",
 }
-
-_TELEOP_POSE_DOF = 7
 
 
 def _side_of(name: Any) -> Optional[str]:
@@ -32,71 +30,6 @@ def _side_of(name: Any) -> Optional[str]:
 def _pose_values(pose: Any) -> List[float]:
     data = getattr(pose, "data", pose)
     return [float(v) for v in data]
-
-
-def teleop_to_device(frame: Any) -> Dict[str, Any]:
-    """Default TeleopFrame -> device command mapping (no configuration needed).
-
-    Left and right are independent: only sides present in the frame are emitted.
-    A side that is absent gets no field at all, so the hardware adapter keeps
-    its current value for that side (no fill-in, no zero-padding).
-
-    Returns:
-        Flat command dict consumed by the adapter ``send_action``:
-        ``left/right_pose_cmd_ee``, ``left/right_gripper``,
-        ``joint_names`` + ``arm_cmd_joint_pos``, ``teleop_command`` (lifecycle
-        frames only).  Empty dict when the frame carries no device action.
-    """
-    command: Dict[str, Any] = {}
-    if frame is None:
-        return command
-
-    command_name = getattr(frame, "command", None)
-    if command_name:
-        # Lifecycle frames (start/pause/resume/finish) never drive the device.
-        command["teleop_command"] = str(command_name)
-        return command
-
-    poses = getattr(frame, "end_effector_poses", None)
-    if poses is not None:
-        names = list(getattr(poses, "names", []) or [])
-        pose_values = list(getattr(poses, "pose", []) or [])
-        for name, pose in zip(names, pose_values):
-            side = _side_of(name)
-            if side is None:
-                logger.warning("[teleop_to_device] unknown pose side %r; skipped", name)
-                continue
-            values = _pose_values(pose)
-            if len(values) != _TELEOP_POSE_DOF:
-                logger.warning(
-                    "[teleop_to_device] %s pose expects %d values, got %d; skipped",
-                    side,
-                    _TELEOP_POSE_DOF,
-                    len(values),
-                )
-                continue
-            command[f"{side}_pose_cmd_ee"] = values
-
-    states = getattr(frame, "end_effector_states", None)
-    if states is not None:
-        names = list(getattr(states, "names", []) or [])
-        position = list(getattr(states, "position", []) or [])
-        for name, value in zip(names, position):
-            side = _side_of(name)
-            if side is None:
-                logger.warning("[teleop_to_device] unknown trigger side %r; skipped", name)
-                continue
-            command[f"{side}_gripper"] = float(value)
-
-    joint_states = getattr(frame, "joint_states", None)
-    if joint_states is not None:
-        joint_names = list(getattr(joint_states, "names", []) or [])
-        joint_position = [float(v) for v in (getattr(joint_states, "position", []) or [])]
-        if joint_names and joint_position:
-            command["joint_names"] = joint_names
-            command["arm_cmd_joint_pos"] = joint_position
-
-    return command
 
 
 def _decode_extensions(mapping: Mapping[str, Any], source: Any) -> Dict[str, Any]:
@@ -220,15 +153,6 @@ def _apply_mapper(mapper: ConfigDrivenMapper | None, payload: Mapping[str, Any])
     return mapper.map(payload) if mapper is not None else dict(payload)
 
 
-# Fallback used by ConfigurableDeviceTranslator.teleop_to_device when the config
-# has no teleop_to_device section. Alias keeps the call site unambiguous against
-# the same-named method.
-_default_teleop_to_device = teleop_to_device
-
-
-logger = logging.getLogger(__name__)
-
-
 class ConfigurableDeviceTranslator(IDeviceTranslator):
     """Translate raw device observations and R2C actions via YAML-like mapping rules."""
 
@@ -288,16 +212,13 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
     def teleop_to_device(self, frame: Any) -> Any:
         """Translate a TeleopFrame into a device command (plan B: reuse send_action).
 
-        Uses the ``teleop_to_device.mappings`` rules when configured (same shape
-        as ``r2c_to_device``); otherwise falls back to the conventional default
-        fields (``left/right_pose_cmd_ee``, ``left/right_gripper``,
-        ``joint_names`` + ``arm_cmd_joint_pos``, ``teleop_command``).
+        Same contract as ``r2c_to_device``: the ``teleop_to_device.mappings``
+        rules when configured, otherwise the payload passes through unchanged
+        (a robot without that section therefore issues no teleop command).
 
         Left and right stay independent: a side absent from the frame produces no
         field, so the adapter holds that side at its current device value.
         """
-        if self._teleop_to_device_mapper is None:
-            return _default_teleop_to_device(frame)
         mapped = _apply_mapper(
             self._teleop_to_device_mapper, _teleop_frame_to_mapping(frame)
         )

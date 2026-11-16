@@ -4,9 +4,8 @@
 适配器 ``send_action`` 接受的平铺字段（方案 B，复用 send_action，零新增
 适配器接口）。覆盖：
 
-- 函数式默认转换（无配置回退路径）；
 - ``ConfigurableDeviceTranslator._teleop_to_device_mapper``（与
-  ``r2c_to_device`` 同构的配置段）；
+  ``r2c_to_device`` 同构的配置段；无配置段时按 r2c 契约原样透传）；
 - 左右臂分开：只出现一侧时只下发该侧；
 - 启动校验（``collect_mapping_config_errors`` 覆盖新段）；
 - AgiBot G01 真机/mock 配置加载与 mock 端到端。
@@ -130,51 +129,14 @@ def test_from_dict_accepts_map_pose_shape():
     assert list(frame.end_effector_poses.pose[1]) == pytest.approx(RIGHT_POSE)
 
 
-def test_functional_dual_side_pose_and_gripper():
-    from cloudrobo_r2c.translators import teleop_to_device
-
-    command = teleop_to_device(TeleopFrame.from_dict(ACTION_FRAME))
-    assert command["left_pose_cmd_ee"] == pytest.approx(LEFT_POSE)
-    assert command["right_pose_cmd_ee"] == pytest.approx(RIGHT_POSE)
-    # 夹爪按侧分开输出
-    assert command["left_gripper"] == pytest.approx(0.2)
-    assert command["right_gripper"] == pytest.approx(0.8)
-    assert "teleop_command" not in command
-
-
-def test_functional_command_frame_no_device_action():
-    from cloudrobo_r2c.translators import teleop_to_device
-
-    start = TeleopFrame.from_dict({"timestamp": 1, "start": {}})
-    assert teleop_to_device(start) == {"teleop_command": "start"}
-
-
-def test_functional_single_side_only_emits_that_side():
-    """只握左手：只输出左侧字段，右侧完全不下发（不是补齐、不是猜测）。"""
-    from cloudrobo_r2c.translators import teleop_to_device
-
-    command = teleop_to_device(TeleopFrame.from_dict(LEFT_ONLY_FRAME))
-    assert command["left_pose_cmd_ee"] == pytest.approx(LEFT_POSE)
-    assert command["left_gripper"] == pytest.approx(0.35)
-    assert "right_pose_cmd_ee" not in command
-    assert "right_gripper" not in command
-    assert "gripper_cmd_pos" not in command
-
-
-def test_functional_right_only():
-    from cloudrobo_r2c.translators import teleop_to_device
-
-    frame = TeleopFrame.from_dict(
-        {"timestamp": 1, "end_effector_states": {"names": ["right"], "position": [0.9]}}
-    )
-    assert teleop_to_device(frame) == {"right_gripper": pytest.approx(0.9)}
-
-
-def test_functional_empty_action_frame_is_noop():
-    from cloudrobo_r2c.translators import teleop_to_device
-
-    frame = TeleopFrame.from_dict({"timestamp": 1, "operator_id": "op"})
-    assert teleop_to_device(frame) == {}
+def test_no_section_passes_payload_through_like_r2c_to_device():
+    """无 teleop_to_device 段：与 r2c_to_device 一致——原样透传，不下发设备命令。"""
+    translator = _translator({"translator": {"type": "configurable"}})
+    command = translator.teleop_to_device(TeleopFrame.from_dict(ACTION_FRAME))
+    # 未配置规则 → 返回归一化后的帧字段，不含适配器约定的设备字段
+    assert "left_pose_cmd_ee" not in command
+    assert "left_gripper" not in command
+    assert command["end_effector_poses"]["left"]["pose"] == pytest.approx(LEFT_POSE)
 
 
 # ---------------------------------------------------------------------------
@@ -247,13 +209,12 @@ def test_interface_teleop_to_device_is_optional():
     with pytest.raises(NotImplementedError):
         legacy.teleop_to_device(TeleopFrame.from_dict({"timestamp": 1}))
 
-    # 支持遥操的 translator 覆盖该方法
-    translator = _translator({"translator": {"type": "configurable"}})
+    # 支持遥操的 translator 覆盖该方法（配置了 teleop_to_device 段）
+    translator = _translator(_load_yaml(MOCK_CONFIG_PATH))
     assert isinstance(translator, IDeviceTranslator)
     assert callable(translator.teleop_to_device)
-    assert translator.teleop_to_device(TeleopFrame.from_dict(ACTION_FRAME))[
-        "left_gripper"
-    ] == pytest.approx(0.2)
+    command = translator.teleop_to_device(TeleopFrame.from_dict(ACTION_FRAME))
+    assert command["left_gripper"] == pytest.approx(0.2)
 
 
 def test_build_teleop_to_device_mapper_helper():
