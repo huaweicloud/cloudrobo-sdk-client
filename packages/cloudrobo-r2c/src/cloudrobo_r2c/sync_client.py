@@ -454,6 +454,7 @@ class SyncRobotClient:
         skip_initial_observations: int = 1,
         state_types: Optional[List[str]] = None,
         state_type_order: Optional[Dict[str, str]] = None,
+        teleop_enabled: bool = False,
     ) -> None:
         if target_fps <= 0:
             raise ValueError("target_fps must be > 0")
@@ -518,6 +519,19 @@ class SyncRobotClient:
 
         self._recorder = recorder
 
+        # ── Teleop session gating (plan B) ────────────────────────────────
+        # While a teleop session is RUNNING, ``inference/actions`` is not
+        # consumed and only ``teleop/actions`` frames drive the device
+        # (design §3.3.1.2).  Enabled when the robot config declares a
+        # ``teleop_to_device`` section (manifest-declared capability).
+        self.teleop_enabled = bool(teleop_enabled)
+        self._teleop_lock = threading.Lock()
+        # "idle" (no teleop session) | "running" | "paused"
+        self._teleop_state = "idle"
+        self._teleop_session_id = ""
+        self._teleop_dropped_actions = 0
+        self._teleop_dropped_inference = 0
+
         self.publish_trigger_threshold = int(publish_trigger_threshold)
         self.skip_initial_observations = int(skip_initial_observations)
         self._skipped_initial_observations: int = 0
@@ -578,6 +592,13 @@ class SyncRobotClient:
             heartbeat_setter=session.set_heartbeat_mode,
         )
 
+        # Plan B capability declaration: a robot that ships a
+        # teleop_to_device mapping section accepts teleop sessions.
+        teleop_cfg = robot_config.get("teleop_to_device")
+        teleop_enabled = bool(
+            isinstance(teleop_cfg, Mapping) and teleop_cfg.get("mappings")
+        )
+
         client = cls(
             session=session,
             hardware_adapter=hardware_adapter,
@@ -599,6 +620,7 @@ class SyncRobotClient:
             skip_initial_observations=r["skip_initial_observations"],
             state_types=a["state_types"],
             state_type_order=a["state_type_order"],
+            teleop_enabled=teleop_enabled,
         )
         # 心跳自动发布（runtime.heartbeat，缺省开启 500ms/次即 2Hz）：所有经
         # from_config 构建的客户端统一启用
@@ -657,6 +679,8 @@ class SyncRobotClient:
         self._running.set()
         self._subscribe_actions()
         self._subscribe_commands()
+        if self.teleop_enabled:
+            self._subscribe_teleop_actions()
         if self.keyboard_control_enabled:
             self._keyboard_controller = KeyboardController(
                 adapter=self.hardware_adapter,
@@ -716,6 +740,96 @@ class SyncRobotClient:
 
         self.session.subscribe_actions(_on_actions)
 
+    def _teleop_session_state(self) -> str:
+        """Current teleop session state (``idle`` / ``running`` / ``paused``)."""
+        with self._teleop_lock:
+            return self._teleop_state
+
+    def _subscribe_teleop_actions(self) -> None:
+        """Subscribe ``teleop/actions`` and drive the device during teleop sessions.
+
+        会话门控（设计 §3.3.1.2）：
+        - 命令帧任何状态优先处理：start → RUNNING，pause → PAUSED，
+          resume → RUNNING，finish/quit → IDLE；
+        - 动作帧仅在 RUNNING 且 ``session_id`` 匹配时执行（经
+          ``translator.teleop_to_device`` → ``send_action``），否则丢弃并计数；
+        - ``_enqueue_action_chunk`` 在 RUNNING 时忽略 ``inference/actions``，
+          策略动作既不执行也不缓存。
+        """
+
+        def _on_teleop_frame(frame: Any) -> None:
+            try:
+                self._on_teleop_frame(frame)
+            except Exception:  # defensive callback boundary
+                logger.exception("Failed to handle teleop frame")
+
+        self.session.subscribe_teleop_actions(_on_teleop_frame)
+        logger.info(
+            "subscribed teleop/actions topic: %s/%s/teleop/actions",
+            self.session.project_id,
+            self.session.device_id,
+        )
+
+    def _on_teleop_frame(self, frame: Any) -> None:
+        command = getattr(frame, "command", None)
+        session_id = str(getattr(frame, "session_id", "") or "")
+
+        if command:
+            with self._teleop_lock:
+                state = self._teleop_state
+                if command == "start":
+                    self._teleop_state = "running"
+                    self._teleop_session_id = session_id
+                elif command == "pause" and state == "running":
+                    self._teleop_state = "paused"
+                elif command == "resume" and state == "paused":
+                    self._teleop_state = "running"
+                elif command in ("finish", "quit"):
+                    self._teleop_state = "idle"
+                    self._teleop_session_id = ""
+                new_state = self._teleop_state
+            logger.info(
+                "teleop %s frame: state %s -> %s",
+                command,
+                state,
+                new_state,
+            )
+            return
+
+        # ── Action frame ──────────────────────────────────────────────
+        with self._teleop_lock:
+            running = self._teleop_state == "running"
+            expected_session = self._teleop_session_id
+        if not running:
+            self._teleop_dropped_actions += 1
+            if self._teleop_dropped_actions % 20 == 1:
+                logger.warning(
+                    "Teleop action frame dropped: no RUNNING session "
+                    "(dropped=%d)",
+                    self._teleop_dropped_actions,
+                )
+            return
+        if session_id and session_id != expected_session:
+            self._teleop_dropped_actions += 1
+            logger.warning(
+                "Teleop action frame dropped: session_id %r != %r (dropped=%d)",
+                session_id,
+                expected_session,
+                self._teleop_dropped_actions,
+            )
+            return
+
+        device_command = self.translator.teleop_to_device(frame)
+        if not device_command:
+            return
+        if not self.dry_run:
+            self.hardware_adapter.send_action(device_command)
+        else:
+            logger.info(
+                "[TELEOP][DRY_RUN] would send: %s",
+                sorted(device_command),
+            )
+
     def _subscribe_commands(self) -> None:
         """Subscribe the cloud ``command`` topic directly (not via topic binding).
 
@@ -747,6 +861,19 @@ class SyncRobotClient:
     def _enqueue_action_chunk(self, actions: Actions) -> None:
         if self._paused.is_set():
             logger.debug("Dropping incoming action chunk because flow is paused.")
+            return
+
+        # ── Teleop session gating (design §3.3.1.2) ─────────────────────
+        # While a teleop session is RUNNING only teleop/actions frames are
+        # executed; inference/actions is not consumed (not executed, not
+        # buffered) and policy streaming is left untouched.
+        if self.teleop_enabled and self._teleop_session_state() == "running":
+            self._teleop_dropped_inference += 1
+            logger.debug(
+                "Ignoring inference/actions chunk: teleop session RUNNING "
+                "(ignored=%d)",
+                self._teleop_dropped_inference,
+            )
             return
 
         # ── Preemptive chunk (id == -1) ────────────────────────────────

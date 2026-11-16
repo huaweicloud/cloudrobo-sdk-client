@@ -24,8 +24,8 @@ from cloudrobo_r2c.common.models import (
     ObservationsH264,
 )
 from cloudrobo_r2c.common.utils.h264_decoder import H264Decoder
-from cloudrobo_r2c.common.utils.logging_sanitizer import fmt_size
 from cloudrobo_r2c.common.utils.h264_encoder import H264ImageEncoder
+from cloudrobo_r2c.common.utils.logging_sanitizer import fmt_size
 
 from ._heartbeat_loop import HeartbeatLoop, HeartbeatReportStats
 from ._time_utils import _now_ms, _safe_error
@@ -44,7 +44,7 @@ try:
 except Exception:
     observation_pb2 = None
 
-from cloudrobo_r2c.transport import ITransport, ZenohTransport
+from cloudrobo_r2c.transport import ITransport
 
 
 @dataclass
@@ -279,6 +279,47 @@ class R2CSession:
             except Exception as e:
                 logger.error(
                     "Error parsing action: %s. Payload size: %d bytes",
+                    e,
+                    len(payload),
+                )
+
+        self.transport.subscribe(topic, _wrapper)
+
+    # ── teleop 帧（teleop.proto → TeleopFrame，teleop/actions 话题）──────
+
+    def publish_teleop_actions(self, frame: Any) -> None:
+        """Publish a TeleopFrame to ``{project}/{device}/teleop/actions``.
+
+        ``frame`` 可为 ``TeleopFrame``（自动 ``serialize()``）或已编码 bytes。
+        """
+        from cloudrobo_r2c.common.models import TeleopFrame
+
+        topic = f"{self.project_id}/{self.device_id}/teleop/actions"
+        payload = frame.serialize() if isinstance(frame, TeleopFrame) else bytes(frame)
+        self.transport.publish(topic, payload)
+        logger.debug("Published teleop frame payload (%d bytes)", len(payload))
+
+    def subscribe_teleop_actions(
+        self,
+        callback: Callable[[Any], None],
+        target_device_id: Optional[str] = None,
+    ) -> None:
+        """Subscribe ``{project}/{device}/teleop/actions`` and decode TeleopFrame.
+
+        回调收到 ``TeleopFrame``；解码失败只记录错误日志，不中断订阅。
+        """
+        from cloudrobo_r2c.common.models import TeleopFrame
+
+        dev_id = target_device_id if target_device_id else self.device_id
+        topic = f"{self.project_id}/{dev_id}/teleop/actions"
+
+        def _wrapper(payload: bytes):
+            try:
+                frame = TeleopFrame.from_protobuf(payload)
+                callback(frame)
+            except Exception as e:
+                logger.error(
+                    "Error parsing teleop frame: %s. Payload size: %d bytes",
                     e,
                     len(payload),
                 )
