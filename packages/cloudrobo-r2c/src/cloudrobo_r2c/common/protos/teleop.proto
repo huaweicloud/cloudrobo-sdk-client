@@ -20,6 +20,8 @@ package r2c_sdk;
 import "common.proto";
 import "observation.proto";
 
+option csharp_namespace = "R2c.Sdk";
+
 // Teleop operator frame (both command and action).
 message TeleopFrame {
   // Timestamp (ms epoch), same convention as other r2c messages.
@@ -32,13 +34,15 @@ message TeleopFrame {
   string session_id = 3;
 
   // Session lifecycle command. Only present on control frames;
-  // action frames leave this unset.
+  // action frames leave this unset. Field 8 was the former TeleopQuit
+  // command (removed 2026-11-16); do not reuse the number.
+  reserved 8;
+  reserved "quit";
   oneof command {
     TeleopStart start = 4;
     TeleopPause pause = 5;
     TeleopResume resume = 6;
     TeleopFinish finish = 7;
-    TeleopQuit quit = 8;
   }
 
   // Joint states (reserved for future use, currently empty).
@@ -55,21 +59,22 @@ message TeleopFrame {
   // Raw headset control inputs (A/X, thumbstick button, thumbstick axes),
   // attached to action frames as a passthrough for downstream logic.
   // The gateway makes NO session decisions from these.
-  RawInputs raw_inputs = 12;
+  // Grouped per hand/control (following observation.proto's extension
+  // mechanism):
+  //   <hand>.btn.primary     bool   primary/manipulator button — not limited
+  //                                 to VR controllers; a master/slave arm
+  //                                 button may publish it too
+  //   <hand>.btn.thumbstick  bool   thumbstick press
+  //   <hand>.stick.x/y       float  thumbstick axis, -1..1
+  // where <hand> is "left" or "right". Field 12 was the former flat
+  // raw_inputs message (removed 2026-11-15); do not reuse the number.
+  reserved 12;
+  reserved "raw_inputs";
+  map<string, ExtensionValue> extensions = 13;
 }
 
-// Raw headset control inputs, per hand. Passthrough only: the gateway
-// makes no session decisions from these fields.
-message RawInputs {
-  bool primary_left = 1;            // A/X button
-  bool primary_right = 2;
-  bool thumbstick_pressed_left = 3;
-  bool thumbstick_pressed_right = 4;
-  float thumbstick_x_left = 5;      // thumbstick axes, -1..1
-  float thumbstick_y_left = 6;
-  float thumbstick_x_right = 7;
-  float thumbstick_y_right = 8;
-}
+// Removed 2026-11-15: the flat raw_inputs message is replaced by the
+// grouped extensions above.
 
 message TeleopStart {
   // Current phase: always VR; isomorphic arm is future work.
@@ -80,7 +85,6 @@ message TeleopStart {
 message TeleopPause {}
 message TeleopResume {}
 message TeleopFinish {}
-message TeleopQuit {}
 
 enum InputMode {
   INPUT_MODE_UNSPECIFIED = 0;

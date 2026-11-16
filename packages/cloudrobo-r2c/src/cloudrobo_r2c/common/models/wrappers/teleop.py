@@ -5,6 +5,11 @@ teleop.proto 是 teleop topic 的唯一 proto（复用 observation.proto 的
 （末端位姿 + 夹爪/触发值）走 BEST_EFFORT；未握持的手其位姿与触发值
 不进消息——数据缺席即安全信号。
 
+原始手柄/主从臂输入（primary 按钮、摇杆按键与轴值）经 extensions 透传，
+键名按 ``<hand>.btn.primary`` / ``<hand>.btn.thumbstick`` /
+``<hand>.stick.x`` / ``<hand>.stick.y`` 分组（``<hand>`` 为
+``left``/``right``）；网关不据此做会话决策。
+
 供 tools/custom_topic_listener、custom_topic_subscriber、
 custom_topic_publisher 通过 ``cloudrobo_r2c.common.models:TeleopFrame``
 引用（wrapper 四方法协议）。
@@ -16,6 +21,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from .common import ExtensionValue
 from .observations import EndEffectorPoses, EndEffectorStates
 
 logger = logging.getLogger(__name__)
@@ -28,7 +34,13 @@ except Exception:
 
 @dataclass
 class RawInputs:
-    """原始手柄输入（A/X 按钮、摇杆按键与轴值），仅透传。"""
+    """手柄/主从臂输入的便捷封装，与 extensions 键名互转。
+
+    键名约定（teleop.proto TeleopFrame.extensions，分组透传）：
+    ``<hand>.btn.primary`` bool、``<hand>.btn.thumbstick`` bool、
+    ``<hand>.stick.x`` float、``<hand>.stick.y`` float，
+    ``<hand>`` 为 ``left``/``right``。
+    """
 
     primary_left: bool = False
     primary_right: bool = False
@@ -39,9 +51,62 @@ class RawInputs:
     thumbstick_x_right: float = 0.0
     thumbstick_y_right: float = 0.0
 
+    _BOOL_KEYS = {
+        "primary_left": "left.btn.primary",
+        "primary_right": "right.btn.primary",
+        "thumbstick_pressed_left": "left.btn.thumbstick",
+        "thumbstick_pressed_right": "right.btn.thumbstick",
+    }
+    _FLOAT_KEYS = {
+        "thumbstick_x_left": "left.stick.x",
+        "thumbstick_y_left": "left.stick.y",
+        "thumbstick_x_right": "right.stick.x",
+        "thumbstick_y_right": "right.stick.y",
+    }
 
-# 会话命令命令名 ↔ oneof 字段（proto: TeleopStart/Pause/Resume/Finish/Quit）
-_COMMAND_FIELDS = ("start", "pause", "resume", "finish", "quit")
+    @classmethod
+    def from_extensions(
+        cls, extensions: Dict[str, ExtensionValue]
+    ) -> "RawInputs":
+        """从 extensions dict 还原（未出现的键取默认值）。"""
+        raw = cls()
+        for attr, key in cls._BOOL_KEYS.items():
+            ev = extensions.get(key)
+            if ev is not None:
+                try:
+                    setattr(raw, attr, bool(ev.ext_decode()))
+                except Exception:
+                    logger.debug("cannot decode teleop extension %r", key, exc_info=True)
+        for attr, key in cls._FLOAT_KEYS.items():
+            ev = extensions.get(key)
+            if ev is not None:
+                try:
+                    setattr(raw, attr, float(ev.ext_decode()))
+                except Exception:
+                    logger.debug("cannot decode teleop extension %r", key, exc_info=True)
+        return raw
+
+    def to_extensions(self) -> Dict[str, ExtensionValue]:
+        """转为 extensions dict（默认值不写入，保持帧精简）。"""
+        extensions: Dict[str, ExtensionValue] = {}
+        for attr, key in self._BOOL_KEYS.items():
+            value = getattr(self, attr)
+            if value:
+                extensions[key] = ExtensionValue.from_scalar(value)
+        for attr, key in self._FLOAT_KEYS.items():
+            value = getattr(self, attr)
+            if value != 0.0:
+                extensions[key] = ExtensionValue.from_scalar(value)
+        return extensions
+
+
+# 会话命令名 ↔ oneof 字段（proto: TeleopStart/Pause/Resume/Finish；
+# TeleopQuit 已于 2026-11-16 移除，field 8/"quit" 被 reserved）
+_COMMAND_FIELDS = ("start", "pause", "resume", "finish")
+
+# 2026-11-15/16 从 proto 移除的旧顶层键：输入中出现即 fail-fast，
+# 提示按新协议构造（quit → 不再有；raw_inputs → extensions）
+_REMOVED_KEYS = ("quit", "raw_inputs")
 
 
 def _parse_command(data: Dict[str, Any]) -> Optional[str]:
@@ -50,6 +115,12 @@ def _parse_command(data: Dict[str, Any]) -> Optional[str]:
     JSON 里 ``"start": {}`` 表示命令存在，``null`` 表示无命令；
     其余类型（bool/str/数字）视为无效载荷并 fail-fast。
     """
+    for removed in _REMOVED_KEYS:
+        if removed in data:
+            raise ValueError(
+                f"TeleopFrame field {removed!r} was removed from teleop.proto "
+                f"(reserved); use the current protocol instead"
+            )
     for name in _COMMAND_FIELDS:
         if name in data and data[name] is not None:
             payload = data[name]
@@ -64,19 +135,20 @@ def _parse_command(data: Dict[str, Any]) -> Optional[str]:
 
 @dataclass
 class TeleopFrame:
-    """Teleop 操作端帧：会话命令 + 末端位姿/触发值 + 原始手柄输入。"""
+    """Teleop 操作端帧：会话命令 + 末端位姿/触发值 + 透传输入。"""
 
     timestamp: int = 0
     operator_id: str = ""
     session_id: str = ""
-    # 会话命令名："start"/"pause"/"resume"/"finish"/"quit"，动作帧为 None
+    # 会话命令名："start"/"pause"/"resume"/"finish"，动作帧为 None
     command: Optional[str] = None
     # start 命令的 input_mode："vr"（当前）/"isomorphic"（预留）
     input_mode: str = "unspecified"
     joint_states: EndEffectorStates = field(default_factory=EndEffectorStates)
     end_effector_poses: EndEffectorPoses = field(default_factory=EndEffectorPoses)
     end_effector_states: EndEffectorStates = field(default_factory=EndEffectorStates)
-    raw_inputs: RawInputs = field(default_factory=RawInputs)
+    # 透传输入 extensions（键名约定见 RawInputs；可放任意 ExtensionValue）
+    extensions: Dict[str, ExtensionValue] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TeleopFrame":
@@ -105,17 +177,7 @@ class TeleopFrame:
             position=list(ee_states_data.get("position", [])),
             force=list(ee_states_data.get("force", [])),
         )
-        raw_data = data.get("raw_inputs") or {}
-        raw_inputs = RawInputs(
-            primary_left=bool(raw_data.get("primary_left", False)),
-            primary_right=bool(raw_data.get("primary_right", False)),
-            thumbstick_pressed_left=bool(raw_data.get("thumbstick_pressed_left", False)),
-            thumbstick_pressed_right=bool(raw_data.get("thumbstick_pressed_right", False)),
-            thumbstick_x_left=float(raw_data.get("thumbstick_x_left", 0.0)),
-            thumbstick_y_left=float(raw_data.get("thumbstick_y_left", 0.0)),
-            thumbstick_x_right=float(raw_data.get("thumbstick_x_right", 0.0)),
-            thumbstick_y_right=float(raw_data.get("thumbstick_y_right", 0.0)),
-        )
+        extensions = _parse_extensions(data.get("extensions") or {})
         return cls(
             timestamp=data.get("timestamp", 0),
             operator_id=data.get("operator_id", ""),
@@ -125,7 +187,7 @@ class TeleopFrame:
             joint_states=joint_states,
             end_effector_poses=ee_poses,
             end_effector_states=ee_states,
-            raw_inputs=raw_inputs,
+            extensions=extensions,
         )
 
     @classmethod
@@ -135,7 +197,6 @@ class TeleopFrame:
         pb = teleop_pb2.TeleopFrame()
         pb.ParseFromString(payload)
         which = pb.WhichOneof("command")
-        raw = pb.raw_inputs
         if which == "start":
             # proto 枚举名 INPUT_MODE_VR → 简名 vr（与 to_protobuf 约定互逆）
             enum_name = teleop_pb2.InputMode.Name(pb.start.input_mode)
@@ -162,16 +223,7 @@ class TeleopFrame:
                 position=list(pb.end_effector_states.position),
                 force=list(pb.end_effector_states.force),
             ),
-            raw_inputs=RawInputs(
-                primary_left=raw.primary_left,
-                primary_right=raw.primary_right,
-                thumbstick_pressed_left=raw.thumbstick_pressed_left,
-                thumbstick_pressed_right=raw.thumbstick_pressed_right,
-                thumbstick_x_left=raw.thumbstick_x_left,
-                thumbstick_y_left=raw.thumbstick_y_left,
-                thumbstick_x_right=raw.thumbstick_x_right,
-                thumbstick_y_right=raw.thumbstick_y_right,
-            ),
+            extensions=ExtensionValue.from_proto_extensions(pb.extensions),
         )
 
     def to_protobuf(self) -> Any:
@@ -204,15 +256,13 @@ class TeleopFrame:
         pb.end_effector_states.names.extend(self.end_effector_states.names)
         pb.end_effector_states.position.extend(self.end_effector_states.position)
         pb.end_effector_states.force.extend(self.end_effector_states.force)
-        raw = self.raw_inputs
-        pb.raw_inputs.primary_left = raw.primary_left
-        pb.raw_inputs.primary_right = raw.primary_right
-        pb.raw_inputs.thumbstick_pressed_left = raw.thumbstick_pressed_left
-        pb.raw_inputs.thumbstick_pressed_right = raw.thumbstick_pressed_right
-        pb.raw_inputs.thumbstick_x_left = raw.thumbstick_x_left
-        pb.raw_inputs.thumbstick_y_left = raw.thumbstick_y_left
-        pb.raw_inputs.thumbstick_x_right = raw.thumbstick_x_right
-        pb.raw_inputs.thumbstick_y_right = raw.thumbstick_y_right
+        # -- extensions（map<string, ExtensionValue>）--------------
+        for key, ev in self.extensions.items():
+            ev_pb = pb.extensions[key]
+            ev_pb.dtype = ev.to_proto_dtype()
+            ev_pb.shape.extend(ev.shape)
+            ev_pb.data = ev.data
+            ev_pb.mime_type = ev.mime_type
         return pb
 
     def serialize(self) -> bytes:
@@ -239,14 +289,54 @@ class TeleopFrame:
                 "position": list(self.end_effector_states.position),
                 "force": list(self.end_effector_states.force),
             },
-            "raw_inputs": {
-                "primary_left": self.raw_inputs.primary_left,
-                "primary_right": self.raw_inputs.primary_right,
-                "thumbstick_pressed_left": self.raw_inputs.thumbstick_pressed_left,
-                "thumbstick_pressed_right": self.raw_inputs.thumbstick_pressed_right,
-                "thumbstick_x_left": self.raw_inputs.thumbstick_x_left,
-                "thumbstick_y_left": self.raw_inputs.thumbstick_y_left,
-                "thumbstick_x_right": self.raw_inputs.thumbstick_x_right,
-                "thumbstick_y_right": self.raw_inputs.thumbstick_y_right,
+            "extensions": {
+                key: {
+                    "dtype": ev.dtype,
+                    "shape": list(ev.shape),
+                    "data": ev.data.hex(),
+                    "mime_type": ev.mime_type,
+                }
+                for key, ev in self.extensions.items()
             },
         }
+
+
+def _parse_extensions(
+    data: Dict[str, Any],
+) -> Dict[str, ExtensionValue]:
+    """解析 TeleopFrame.extensions：ExtensionValue 或其字段 dict。
+
+    标量便捷写法（bool/int/float/str/bytes）也接受，便于 publisher 的
+    JSON 输入直接写 ``"left.btn.primary": true`` 风格的键值。dict 形式的
+    ``data`` 支持十六进制字符串（如 to_dict 的输出）或 bytes。
+    """
+    result: Dict[str, ExtensionValue] = {}
+    for key, val in data.items():
+        if isinstance(val, ExtensionValue):
+            result[key] = val
+        elif isinstance(val, dict):
+            raw_data = val.get("data", b"")
+            if isinstance(raw_data, str):
+                raw_data = bytes.fromhex(raw_data)
+            result[key] = ExtensionValue(
+                dtype=str(val.get("dtype", "")),
+                shape=list(val.get("shape", [])),
+                data=bytes(raw_data),
+                mime_type=str(val.get("mime_type", "")),
+            )
+        elif isinstance(val, bool):
+            result[key] = ExtensionValue.from_scalar(val)
+        elif isinstance(val, int):
+            result[key] = ExtensionValue.from_scalar(val)
+        elif isinstance(val, float):
+            result[key] = ExtensionValue.from_scalar(val)
+        elif isinstance(val, str):
+            result[key] = ExtensionValue.from_string(val)
+        elif isinstance(val, (bytes, bytearray)):
+            result[key] = ExtensionValue(dtype="BYTES", data=bytes(val))
+        else:
+            raise ValueError(
+                f"TeleopFrame extensions[{key!r}] must be an ExtensionValue, "
+                f"a dict, or a scalar, got {type(val).__name__}"
+            )
+    return result
