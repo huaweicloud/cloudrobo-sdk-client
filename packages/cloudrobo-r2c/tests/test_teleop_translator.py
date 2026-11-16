@@ -108,6 +108,28 @@ _CUSTOM_CONFIG = {
 # ---------------------------------------------------------------------------
 
 
+def test_proto_roundtrip_single_side_pose_map():
+    """新 proto（end_effector_poses 为 map<hand, pose>）单侧 round-trip。"""
+    frame = TeleopFrame.from_dict(LEFT_ONLY_FRAME)
+    back = TeleopFrame.from_protobuf(frame.serialize())
+    assert back.end_effector_poses.names == ["left"]
+    assert list(back.end_effector_poses.pose[0]) == pytest.approx(LEFT_POSE)
+    assert back.end_effector_states.names == ["left"]
+    assert list(back.end_effector_states.position) == pytest.approx([0.35])
+
+
+def test_from_dict_accepts_map_pose_shape():
+    """from_dict 同时接受 proto map 形态（{"pose": {hand: pose}}）。"""
+    frame = TeleopFrame.from_dict(
+        {
+            "timestamp": 1,
+            "end_effector_poses": {"pose": {"left": LEFT_POSE, "right": RIGHT_POSE}},
+        }
+    )
+    assert frame.end_effector_poses.names == ["left", "right"]
+    assert list(frame.end_effector_poses.pose[1]) == pytest.approx(RIGHT_POSE)
+
+
 def test_functional_dual_side_pose_and_gripper():
     from cloudrobo_r2c.translators import teleop_to_device
 

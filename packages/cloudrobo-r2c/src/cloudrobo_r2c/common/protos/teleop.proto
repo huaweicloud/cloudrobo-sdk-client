@@ -18,7 +18,6 @@ syntax = "proto3";
 package r2c_sdk;
 
 import "common.proto";
-import "observation.proto";
 
 option csharp_namespace = "R2c.Sdk";
 
@@ -45,16 +44,21 @@ message TeleopFrame {
     TeleopFinish finish = 7;
   }
 
-  // Joint states (reserved for future use, currently empty).
-  JointStates joint_states = 9;
+  // Joint states. Mirrors action.proto's JointAction with the chunk-level
+  // repeated removed (a teleop frame carries exactly one chunk): names plus
+  // a single step per channel, where the step itself still holds one value
+  // per joint.
+  TeleopJointStates joint_states = 9;
 
-  // Per-hand absolute poses. Only includes hands whose grip is pressed.
-  // Reuses observation.proto's EndEffectorPoses (flat: names + Pose7D list).
-  EndEffectorPoses end_effector_poses = 10;
+  // Per-hand absolute poses. action.proto's map<string,
+  // EndEffectorPoseChunk> shape with the chunk-level repeated removed: one
+  // TeleopEndEffectorPose per hand (key = hand name).
+  TeleopEndEffectorPoses end_effector_poses = 10;
 
-  // Per-hand trigger values. Reuses observation.proto's EndEffectorStates
-  // (position carries the trigger 0..1 per hand).
-  EndEffectorStates end_effector_states = 11;
+  // Per-hand trigger values (action.proto's EndEffectorStateAction with the
+  // chunk-level repeated removed; the step's data carries one trigger per
+  // hand).
+  TeleopEndEffectorStates end_effector_states = 11;
 
   // Raw headset control inputs (A/X, thumbstick button, thumbstick axes),
   // attached to action frames as a passthrough for downstream logic.
@@ -85,6 +89,47 @@ message TeleopStart {
 message TeleopPause {}
 message TeleopResume {}
 message TeleopFinish {}
+
+// One time step of per-element values (action.proto's JointStateStep shape).
+// In teleop frames this is a single step (one chunk per frame), so it is not
+// repeated: `data` holds one value per joint / end effector.
+message TeleopStep {
+  repeated double data = 1;
+}
+
+// action.proto's JointAction with the chunk-level repeated removed.
+message TeleopJointStates {
+  // Joint names (length = N_joints).
+  repeated string names = 1;
+  // One step per channel; data length = N_joints.
+  TeleopStep position = 2;
+  TeleopStep velocity = 3;
+  TeleopStep torque = 4;
+}
+
+// action.proto's map<string, EndEffectorPoseChunk> shape with one pose per
+// hand (no chunk dimension; the repeated is removed).
+message TeleopEndEffectorPoses {
+  // Key: hand/effector name (e.g. "left", "right").
+  map<string, TeleopEndEffectorPose> pose = 1;
+}
+
+// One end effector pose (action.proto's EndEffectorPoseChunk without the
+// repeated chunk list).
+message TeleopEndEffectorPose {
+  Pose7D pose = 1;
+}
+
+// action.proto's EndEffectorStateAction with the chunk-level repeated
+// removed.
+message TeleopEndEffectorStates {
+  // Effector names (length = N_effectors).
+  repeated string names = 1;
+  // One step per channel; data length = N_effectors (e.g. trigger 0..1).
+  TeleopStep position = 2;
+  TeleopStep velocity = 3;
+  TeleopStep torque = 4;
+}
 
 enum InputMode {
   INPUT_MODE_UNSPECIFIED = 0;

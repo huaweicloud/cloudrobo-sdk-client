@@ -188,6 +188,12 @@ def _is_empty_value(value: Any) -> bool:
     return isinstance(size, int) and size == 0
 
 
+# Fallback used by ConfigurableDeviceTranslator.teleop_to_device when the config
+# has no teleop_to_device section. Alias keeps the call site unambiguous against
+# the same-named method.
+_default_teleop_to_device = teleop_to_device
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -265,7 +271,7 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         field, so the adapter holds that side at its current device value.
         """
         if self._teleop_to_device_mapper is None:
-            return teleop_to_device(frame)
+            return _default_teleop_to_device(frame)
         mapped = self._teleop_to_device_mapper.map(_teleop_frame_to_mapping(frame))
         # Drop empty targets ([] / None): an empty field would make the adapter
         # reject the whole action as incomplete.

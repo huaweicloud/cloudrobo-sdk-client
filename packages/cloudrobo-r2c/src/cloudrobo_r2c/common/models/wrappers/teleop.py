@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from .common import ExtensionValue
 from .observations import EndEffectorPoses, EndEffectorStates
@@ -167,15 +167,20 @@ class TeleopFrame:
             force=list(joint_states_data.get("torque", [])),
         )
         ee_poses_data = data.get("end_effector_poses") or {}
-        ee_poses = EndEffectorPoses(
-            names=list(ee_poses_data.get("names", [])),
-            pose=[list(p) for p in ee_poses_data.get("pose", [])],
-        )
+        raw_poses = ee_poses_data.get("pose", [])
+        if isinstance(raw_poses, Mapping):
+            # proto 形态：map<hand, TeleopEndEffectorPose>（key 为 hand 名）
+            pose_names = [str(k) for k in raw_poses]
+            pose_values = [list(p) for p in raw_poses.values()]
+        else:
+            pose_names = list(ee_poses_data.get("names", []))
+            pose_values = [list(p) for p in raw_poses]
+        ee_poses = EndEffectorPoses(names=pose_names, pose=pose_values)
         ee_states_data = data.get("end_effector_states") or {}
         ee_states = EndEffectorStates(
             names=list(ee_states_data.get("names", [])),
             position=list(ee_states_data.get("position", [])),
-            force=list(ee_states_data.get("force", [])),
+            force=list(ee_states_data.get("force", ee_states_data.get("torque", []))),
         )
         extensions = _parse_extensions(data.get("extensions") or {})
         return cls(
@@ -203,6 +208,10 @@ class TeleopFrame:
             input_mode = enum_name[len("INPUT_MODE_"):].lower()
         else:
             input_mode = "unspecified"
+        # end_effector_poses 为 map<hand, TeleopEndEffectorPose>：排序得到稳定的
+        # names/pose 顺序（left 在 right 前，与 wrapper 契约一致）。
+        pose_by_hand = {str(k): list(v.pose.data) for k, v in pb.end_effector_poses.pose.items()}
+        pose_names = sorted(pose_by_hand)
         return cls(
             timestamp=pb.timestamp,
             operator_id=pb.operator_id,
@@ -211,17 +220,17 @@ class TeleopFrame:
             input_mode=input_mode,
             joint_states=EndEffectorStates(
                 names=list(pb.joint_states.names),
-                position=list(pb.joint_states.position),
-                force=list(pb.joint_states.torque),
+                position=list(pb.joint_states.position.data),
+                force=list(pb.joint_states.torque.data),
             ),
             end_effector_poses=EndEffectorPoses(
-                names=list(pb.end_effector_poses.names),
-                pose=[list(pose.data) for pose in pb.end_effector_poses.pose],
+                names=pose_names,
+                pose=[pose_by_hand[name] for name in pose_names],
             ),
             end_effector_states=EndEffectorStates(
                 names=list(pb.end_effector_states.names),
-                position=list(pb.end_effector_states.position),
-                force=list(pb.end_effector_states.force),
+                position=list(pb.end_effector_states.position.data),
+                force=list(pb.end_effector_states.torque.data),
             ),
             extensions=ExtensionValue.from_proto_extensions(pb.extensions),
         )
@@ -246,16 +255,16 @@ class TeleopFrame:
                         f"expected one of: unspecified/vr/isomorphic"
                     ) from exc
         pb.joint_states.names.extend(self.joint_states.names)
-        pb.joint_states.position.extend(self.joint_states.position)
-        pb.joint_states.torque.extend(self.joint_states.force)
-        pb.end_effector_poses.names.extend(self.end_effector_poses.names)
-        for pose in self.end_effector_poses.pose:
-            pb.end_effector_poses.pose.add().data.extend(
-                pose.data if hasattr(pose, "data") else pose
-            )
+        pb.joint_states.position.data.extend(self.joint_states.position)
+        pb.joint_states.torque.data.extend(self.joint_states.force)
+        # end_effector_poses 为 map<hand, TeleopEndEffectorPose>：wrapper 保持
+        # 并列 names/pose 列表，这里用 hand 名作为 map key。
+        for name, pose in zip(self.end_effector_poses.names, self.end_effector_poses.pose):
+            values = pose.data if hasattr(pose, "data") else pose
+            pb.end_effector_poses.pose[str(name)].pose.data.extend(values)
         pb.end_effector_states.names.extend(self.end_effector_states.names)
-        pb.end_effector_states.position.extend(self.end_effector_states.position)
-        pb.end_effector_states.force.extend(self.end_effector_states.force)
+        pb.end_effector_states.position.data.extend(self.end_effector_states.position)
+        pb.end_effector_states.torque.data.extend(self.end_effector_states.force)
         # -- extensions（map<string, ExtensionValue>）--------------
         for key, ev in self.extensions.items():
             ev_pb = pb.extensions[key]
