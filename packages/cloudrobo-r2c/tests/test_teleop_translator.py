@@ -231,23 +231,29 @@ def test_mapper_absent_without_section():
     assert _translator({"teleop_to_device": {}})._teleop_to_device_mapper is None
 
 
-def test_interface_requires_teleop_to_device():
-    """IDeviceTranslator 与 r2c_to_device 对称：teleop_to_device 是必需方法。"""
+def test_interface_teleop_to_device_is_optional():
+    """teleop_to_device 按需实现：不支持的 translator 无需实现，调用时报错。"""
     from cloudrobo_r2c.core.interfaces import IDeviceTranslator
 
-    class _LegacyOnly(IDeviceTranslator):
+    class _NoTeleop(IDeviceTranslator):
         def device_to_r2c(self, raw_device_observation):
             return None
 
         def r2c_to_device(self, action_step):
             return {}
 
-    with pytest.raises(TypeError):
-        _LegacyOnly()
+    # 不实现 teleop_to_device 也能实例化（接口默认提供实现）
+    legacy = _NoTeleop()
+    with pytest.raises(NotImplementedError):
+        legacy.teleop_to_device(TeleopFrame.from_dict({"timestamp": 1}))
 
+    # 支持遥操的 translator 覆盖该方法
     translator = _translator({"translator": {"type": "configurable"}})
     assert isinstance(translator, IDeviceTranslator)
     assert callable(translator.teleop_to_device)
+    assert translator.teleop_to_device(TeleopFrame.from_dict(ACTION_FRAME))[
+        "left_gripper"
+    ] == pytest.approx(0.2)
 
 
 def test_build_teleop_to_device_mapper_helper():

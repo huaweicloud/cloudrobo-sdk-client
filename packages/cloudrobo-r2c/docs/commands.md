@@ -27,7 +27,7 @@ cloudrobo r2c client [OPTIONS]
 | `--mode` | 取 YAML（缺省 peer） | 连接模式（peer/client）；显式指定后不再按 YAML/回退逻辑处理 |
 | `--endpoint-role` | 取 YAML（缺省 connect） | Zenoh 端点角色（connect/listen） |
 | `--hardware-class` | - | 自定义 `IRobotHardwareAdapter` 类路径（`pkg.mod.Class`） |
-| `--translator-class` | - | 自定义 `IDeviceTranslator` 类路径（`pkg.mod.Class`）；须实现 `device_to_r2c` / `r2c_to_device` / `teleop_to_device` |
+| `--translator-class` | - | 自定义 `IDeviceTranslator` 类路径（`pkg.mod.Class`）；须实现 `device_to_r2c` / `r2c_to_device`，如需遥操再覆盖 `teleop_to_device`（默认不实现即报告不可遥操） |
 | `--private-key-password` | - | 加密 `server_key.pem` 的密码（避免写入 shell 历史） |
 | `--private-key-password-env` | - | 从指定环境变量读取私钥密码 |
 | `--prompt-password` | 关闭 | 需要密码时交互式提示 |

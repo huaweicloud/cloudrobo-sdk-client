@@ -117,16 +117,24 @@ class IDeviceTranslator(ABC):
     def r2c_to_device(self, action_step: Mapping[str, Any]) -> Any:
         raise NotImplementedError
 
-    @abstractmethod
     def teleop_to_device(self, frame: Any) -> Any:
         """Translate a ``TeleopFrame`` (``teleop/actions``) into a device command.
 
-        Plan B: the result feeds the hardware adapter's existing
+        **Optional override** (按需实现): teleop is not available on every robot,
+        so this is not an abstract method.  A translator that supports teleop
+        overrides it; the default raises ``NotImplementedError`` so a caller can
+        tell "this robot cannot be teleoperated" apart from "this frame carries
+        no device action" (the latter returns an empty mapping).
+
+        Plan B: the returned mapping feeds the hardware adapter's existing
         ``send_action`` — no dedicated adapter interface.  A side absent from
-        the frame must produce no command field, so the adapter holds that
-        side at its current device value.
+        the frame must produce no command field, so the adapter holds that side
+        at its current device value.
         """
-        raise NotImplementedError
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement teleop_to_device "
+            f"(this translator does not support teleoperation)"
+        )
 
 
 class IModelTranslator(ABC):
