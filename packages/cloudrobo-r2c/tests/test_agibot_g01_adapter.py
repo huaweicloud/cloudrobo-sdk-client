@@ -681,8 +681,9 @@ def test_robot_config_yaml_translates_observation_and_action():
     calls = {c[0]: c for c in _last_robot().calls}
     assert calls["move_arm"][1] == [0.1] * ARM_DOF
     assert calls["move_head"][1] == pytest.approx([0.3, -0.1])
-    # joint_states.names 映射为 joint_names（第 7/8 章路由依据；此处为空 → 第 7 章）
-    assert device_command["joint_names"] == []
+    # joint_states.names 为空 → 空目标字段不下发（与 teleop 同构），
+    # 适配器按无 names 的旧位置式路径处理
+    assert "joint_names" not in device_command
 
 
 # ---------------------------------------------------------------------------

@@ -285,6 +285,27 @@ def test_invalid_teleop_mapping_rule_fails_startup_validation():
     assert collect_mapping_config_errors({}) == []
 
 
+def test_config_schema_and_export_cover_teleop_section():
+    """与 r2c_to_device 同构：pydantic 校验与 schema 导出都覆盖遥操段。"""
+    from cloudrobo_r2c.common.robot_config_schema import (
+        RobotConfig,
+        TeleopToDeviceConfig,
+    )
+    from cloudrobo_r2c.common.schema import RobotConfigSchema
+
+    config = _load_yaml(MOCK_CONFIG_PATH)
+    validated = RobotConfig.model_validate(config)
+    assert isinstance(validated.teleop_to_device, TeleopToDeviceConfig)
+
+    schema = RobotConfigSchema.from_dict(config)
+    assert any(
+        field.target_key == "left_pose_cmd_ee" for field in schema.teleop_action.fields
+    )
+    assert "teleop_action" in schema.to_dict()
+    # 未配置遥操段 → 空列表（不是错误）
+    assert RobotConfigSchema.from_dict({}).teleop_action.fields == []
+
+
 # ---------------------------------------------------------------------------
 # AgiBot G01 配置（真机 + mock）加载与 mock 端到端
 # ---------------------------------------------------------------------------

@@ -207,7 +207,7 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
 
     def r2c_to_device(self, action_step: Mapping[str, Any]) -> Any:
         mapping = _decode_extensions(to_mapping(action_step), action_step)
-        return _apply_mapper(self._r2c_to_device_mapper, mapping)
+        return _drop_empty_targets(_apply_mapper(self._r2c_to_device_mapper, mapping))
 
     def teleop_to_device(self, frame: Any) -> Any:
         """Translate a TeleopFrame into a device command (plan B: reuse send_action).

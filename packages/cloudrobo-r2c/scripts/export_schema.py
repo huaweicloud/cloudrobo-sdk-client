@@ -88,7 +88,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(
             f"[Info] schema 已导出到 {args.output} "
             f"({len(schema.observation.fields)} 个观测字段 / "
-            f"{len(schema.action.fields)} 个动作字段)"
+            f"{len(schema.action.fields)} 个动作字段 / "
+            f"{len(schema.teleop_action.fields)} 个遥操字段)"
         )
     else:
         print(payload)

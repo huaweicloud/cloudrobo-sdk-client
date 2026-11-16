@@ -492,10 +492,12 @@ class ActionSchema:
     # ── 工厂方法 ─────────────────────────────────────────────
 
     @classmethod
-    def _from_config(cls, config: Mapping[str, Any]) -> "ActionSchema":
+    def _from_config(
+        cls, config: Mapping[str, Any], section_key: str = "r2c_to_device"
+    ) -> "ActionSchema":
         fields = [
             ActionField._from_mapper_rule(rule)
-            for rule in _iter_mapper_rules(config, "r2c_to_device")
+            for rule in _iter_mapper_rules(config, section_key)
         ]
         return cls(fields=fields)
 
@@ -513,6 +515,8 @@ class RobotConfigSchema:
     translator_type: str = ""  # translator.type
     observation: ObservationSchema = field(default_factory=ObservationSchema)
     action: ActionSchema = field(default_factory=ActionSchema)
+    # teleop_to_device（遥操帧 → 设备命令）为可选段；未配置时为空
+    teleop_action: ActionSchema = field(default_factory=ActionSchema)
 
     # ── 工厂方法 ─────────────────────────────────────────────
 
@@ -544,6 +548,7 @@ class RobotConfigSchema:
             translator_type=translator_type,
             observation=ObservationSchema._from_config(config),
             action=ActionSchema._from_config(config),
+            teleop_action=ActionSchema._from_config(config, "teleop_to_device"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -552,6 +557,7 @@ class RobotConfigSchema:
             "translator_type": self.translator_type,
             "observation": self.observation.to_dict(),
             "action": self.action.to_dict(),
+            "teleop_action": self.teleop_action.to_dict(),
         }
 
     def to_json(self, indent: int = 2) -> str:

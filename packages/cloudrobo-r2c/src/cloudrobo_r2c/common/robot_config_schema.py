@@ -243,6 +243,20 @@ class R2CToDeviceConfig(_PermissiveModel):
     )
 
 
+class TeleopToDeviceConfig(_PermissiveModel):
+    """Downstream mapping: TeleopFrame → device commands (plan B, optional).
+
+    Same rule shape as :class:`R2CToDeviceConfig`; the section is optional —
+    without it the teleop payload passes through unchanged and no device
+    command is produced.
+    """
+
+    mappings: list[Any] = Field(
+        min_length=1,
+        description="List of mapping rules (target, source, source_index, etc.)",
+    )
+
+
 # ── Top-level ────────────────────────────────────────────────────────────────
 
 
@@ -258,6 +272,13 @@ class RobotConfig(_PermissiveModel):
     translator: TranslatorConfig
     device_to_r2c: DeviceToR2CConfig
     r2c_to_device: R2CToDeviceConfig
+    teleop_to_device: Optional[TeleopToDeviceConfig] = Field(
+        default=None,
+        description=(
+            "Optional teleop mapping (TeleopFrame -> device command, plan B); "
+            "when absent the teleop payload passes through unchanged"
+        ),
+    )
     camera_streaming: Optional[CameraStreamingConfig] = Field(
         default=None,
         description=(
