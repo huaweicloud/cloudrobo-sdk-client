@@ -99,32 +99,45 @@ def teleop_to_device(frame: Any) -> Dict[str, Any]:
     return command
 
 
+def _decode_extensions(mapping: Mapping[str, Any], source: Any) -> Dict[str, Any]:
+    """Return a copy of *mapping* with ``extensions`` values decoded.
+
+    Shared by ``r2c_to_device`` (Actions) and the teleop payload: both carry
+    ``ExtensionValue`` objects that must be ``ext_decode``-d before a mapping
+    rule can consume them.  *source* supplies the original objects, because
+    ``to_mapping`` recursion turns them into plain dicts and loses
+    ``ext_decode``.  The input mapping is not mutated.
+    """
+    result = dict(mapping)
+    extensions = result.get("extensions")
+    if not isinstance(extensions, Mapping):
+        return result
+    raw_extensions = getattr(source, "extensions", None)
+    decoded: Dict[str, Any] = {}
+    for key, value in extensions.items():
+        original = value
+        if isinstance(raw_extensions, Mapping):
+            original = raw_extensions.get(str(key), value)
+        ext_decode = getattr(original, "ext_decode", None)
+        decoded[str(key)] = ext_decode() if callable(ext_decode) else value
+    result["extensions"] = decoded
+    return result
+
+
 def _teleop_frame_to_mapping(frame: Any) -> Dict[str, Any]:
     """TeleopFrame (or plain dict) -> mapping-rule payload.
 
-    Reuses ``to_mapping`` for the dataclass -> dict conversion, then normalizes
-    per-side channels by ``names`` so rules can address them like ``r2c_to_device``
+    Reuses ``to_mapping`` for the dataclass -> dict conversion and
+    ``_decode_extensions`` for extension values, then normalizes per-side
+    channels by ``names`` so rules can address them like ``r2c_to_device``
     sources (``end_effector_poses.left.pose``).
-
-    ``extensions`` values are decoded before ``to_mapping`` recursion: an
-    ``ExtensionValue`` is self-describing and would otherwise be flattened into
-    a plain dict, losing ``ext_decode``.
     """
-    mapping = to_mapping(frame)
+    mapping = _decode_extensions(to_mapping(frame), frame)
     extensions = mapping.get("extensions")
     if isinstance(extensions, Mapping):
-        raw_extensions = getattr(frame, "extensions", None)
-        decoded: Dict[str, Any] = {}
-        for key, value in extensions.items():
-            original = value
-            if isinstance(raw_extensions, Mapping):
-                original = raw_extensions.get(str(key), value)
-            ext_decode = getattr(original, "ext_decode", None)
-            decoded[str(key)] = ext_decode() if callable(ext_decode) else value
-        mapping = dict(mapping)
-        mapping["extensions"] = _nest_dotted(decoded)
+        mapping["extensions"] = _nest_dotted(extensions)
         # Keep flat views for keys that are dotted themselves (left.stick.x).
-        for key, value in decoded.items():
+        for key, value in extensions.items():
             mapping.setdefault(f"extensions.{key}", value)
 
     _expand_by_name(mapping, "end_effector_poses", "pose", pose=True)
@@ -188,6 +201,25 @@ def _is_empty_value(value: Any) -> bool:
     return isinstance(size, int) and size == 0
 
 
+def _drop_empty_targets(command: Mapping[str, Any]) -> Dict[str, Any]:
+    """Drop empty target fields from a mapped device command.
+
+    Shared device-command post-processing: an empty target (``[]`` / ``None``)
+    carries no device action and would make the adapter reject the whole action
+    as incomplete, so it must not reach ``send_action``.
+    """
+    return {key: value for key, value in command.items() if not _is_empty_value(value)}
+
+
+def _apply_mapper(mapper: ConfigDrivenMapper | None, payload: Mapping[str, Any]) -> Any:
+    """Map *payload* through *mapper*, or pass it through when no mapper exists.
+
+    Shared by ``device_to_r2c`` / ``r2c_to_device`` / ``teleop_to_device`` so all
+    three follow the same "configured rules, otherwise raw payload" contract.
+    """
+    return mapper.map(payload) if mapper is not None else dict(payload)
+
+
 # Fallback used by ConfigurableDeviceTranslator.teleop_to_device when the config
 # has no teleop_to_device section. Alias keeps the call site unambiguous against
 # the same-named method.
@@ -239,7 +271,7 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
             "task": self._default_task,
             "id": next_global_observation_id(),
         }
-        mapped = self._obs_mapper.map(mapping) if self._obs_mapper else dict(mapping)
+        mapped = _apply_mapper(self._obs_mapper, mapping)
 
         observation_dict.update(mapped)
         # No fallback here: a failure to build the Observation model is a
@@ -250,14 +282,8 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         return Observations.from_dict(observation_dict)
 
     def r2c_to_device(self, action_step: Mapping[str, Any]) -> Any:
-        mapping = to_mapping(action_step)
-        for ext_k in mapping["extensions"]:
-            mapping["extensions"][ext_k] = action_step["extensions"][ext_k].ext_decode()
-
-        device_command = (
-            self._r2c_to_device_mapper.map(mapping) if self._r2c_to_device_mapper else dict(mapping)
-        )
-        return device_command
+        mapping = _decode_extensions(to_mapping(action_step), action_step)
+        return _apply_mapper(self._r2c_to_device_mapper, mapping)
 
     def teleop_to_device(self, frame: Any) -> Any:
         """Translate a TeleopFrame into a device command (plan B: reuse send_action).
@@ -272,10 +298,10 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         """
         if self._teleop_to_device_mapper is None:
             return _default_teleop_to_device(frame)
-        mapped = self._teleop_to_device_mapper.map(_teleop_frame_to_mapping(frame))
-        # Drop empty targets ([] / None): an empty field would make the adapter
-        # reject the whole action as incomplete.
-        return {key: value for key, value in mapped.items() if not _is_empty_value(value)}
+        mapped = _apply_mapper(
+            self._teleop_to_device_mapper, _teleop_frame_to_mapping(frame)
+        )
+        return _drop_empty_targets(mapped)
 
     @staticmethod
     def _build_device_to_r2c_mapper(

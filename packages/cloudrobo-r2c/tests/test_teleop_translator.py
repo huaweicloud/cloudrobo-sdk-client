@@ -264,6 +264,33 @@ def test_build_teleop_to_device_mapper_helper():
     assert mapper is not None
 
 
+def test_r2c_to_device_shares_extension_decoding_without_mutating_input():
+    """r2c_to_device 与 teleop 共用 _decode_extensions：解码生效且不改输入。"""
+    import struct
+
+    from cloudrobo_r2c.common.models import ExtensionValue
+
+    translator = _translator({"translator": {"type": "configurable"}})
+    head = ExtensionValue(
+        dtype="FLOAT32", shape=[2], data=struct.pack("<2f", 0.3, -0.1), mime_type=""
+    )
+    step = {
+        "timestamp": 1,
+        "id": 1,
+        "chunk_index": 0,
+        "joint_states": {"names": [], "position": [], "velocity": [], "torque": []},
+        "end_effector_states": {"names": [], "position": [], "velocity": [], "torque": []},
+        "end_effector_poses": {},
+        "localization": {"odom_pose": [], "map_pose": []},
+        "extensions": {"head_joint": head},
+    }
+    command = translator.r2c_to_device(step)
+    # 无 r2c_to_device 配置段 → 透传 payload，但 extensions 已解码
+    assert command["extensions"]["head_joint"] == pytest.approx([0.3, -0.1])
+    # 输入对象未被就地改写（复用前会原地替换 ExtensionValue）
+    assert step["extensions"]["head_joint"] is head
+
+
 def test_extensions_decoded_for_rules():
     # extensions 值在映射前先 ext_decode，键按点分组可点路径查找
     from cloudrobo_r2c.translators.device_translator import _teleop_frame_to_mapping
