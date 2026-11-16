@@ -270,12 +270,14 @@ def test_gripper_action_accepts_normalized_and_raw():
     assert list(adapter.get_observation()["gripper_positions"]) == pytest.approx([55.0 / 85.0, 1.0])
 
 
-def test_partial_gripper_rejected():
+def test_single_side_gripper_keeps_other_side():
+    """单侧夹爪：该侧动作，另一侧保持当前值（遥操单手握持语义）。"""
     adapter = _connect()
+    before = list(adapter.get_observation()["gripper_positions"])
     adapter.send_action({"joint_names": ["left_gripper"], "arm_cmd_joint_pos": [0.5]})
-    assert list(adapter.get_observation()["gripper_positions"]) == pytest.approx(
-        DEFAULT_INITIAL_GRIPPER
-    )
+    after = list(adapter.get_observation()["gripper_positions"])
+    assert after[0] == pytest.approx(0.5)
+    assert after[1] == pytest.approx(before[1])
 
 
 def test_ext_parts_update_observation():

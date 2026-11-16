@@ -9,8 +9,12 @@ from typing import Any, Mapping
 from cloudrobo_r2c.common.models.wrappers.observations import Observations
 from cloudrobo_r2c.core.config_mapper import ConfigDrivenMapper
 from cloudrobo_r2c.core.interfaces import IDeviceTranslator, ObservationLike
-from cloudrobo_r2c.core.internal.helpers import (next_global_observation_id,
-                                           to_mapping)
+from cloudrobo_r2c.core.internal.helpers import next_global_observation_id, to_mapping
+from cloudrobo_r2c.translators.teleop_translator import (
+    frame_to_mapping,
+    is_empty_value,
+    teleop_to_device as default_teleop_to_device,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +26,11 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         self._config_dict = dict(config_dict)
         self._obs_mapper = self._build_device_to_r2c_mapper(self._config_dict)
         self._r2c_to_device_mapper = self._build_r2c_to_device_mapper(self._config_dict)
+        self._teleop_to_device_mapper = self._build_teleop_to_device_mapper(self._config_dict)
         self._default_task = self._resolve_default_task(self._config_dict)
 
     @classmethod
-    def from_config(
-        cls, config_dict: Mapping[str, Any]
-    ) -> "ConfigurableDeviceTranslator":
+    def from_config(cls, config_dict: Mapping[str, Any]) -> "ConfigurableDeviceTranslator":
         """Build translator from edge/robot config mapping."""
         return cls(config_dict)
 
@@ -48,7 +51,7 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
                 if incomplete.get("optional"):
                     not_ready.extend(incomplete["optional"])
                 logger.warning(
-                    "Observation incomplete - skipping tick. " "Not ready: %s",
+                    "Observation incomplete - skipping tick. Not ready: %s",
                     ", ".join(not_ready),
                 )
                 return None  # sentinel: skip this tick
@@ -74,11 +77,27 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
             mapping["extensions"][ext_k] = action_step["extensions"][ext_k].ext_decode()
 
         device_command = (
-            self._r2c_to_device_mapper.map(mapping)
-            if self._r2c_to_device_mapper
-            else dict(mapping)
+            self._r2c_to_device_mapper.map(mapping) if self._r2c_to_device_mapper else dict(mapping)
         )
         return device_command
+
+    def teleop_to_device(self, frame: Any) -> Any:
+        """Translate a TeleopFrame into a device command (plan B: reuse send_action).
+
+        Uses the ``teleop_to_device.mappings`` rules when configured (same shape
+        as ``r2c_to_device``); otherwise falls back to the conventional default
+        fields (``left/right_pose_cmd_ee``, ``left/right_gripper``,
+        ``joint_names`` + ``arm_cmd_joint_pos``, ``teleop_command``).
+
+        Left and right stay independent: a side absent from the frame produces no
+        field, so the adapter holds that side at its current device value.
+        """
+        if self._teleop_to_device_mapper is None:
+            return default_teleop_to_device(frame)
+        mapped = self._teleop_to_device_mapper.map(frame_to_mapping(frame))
+        # Drop empty targets ([] / None): an empty field would make the adapter
+        # reject the whole action as incomplete.
+        return {key: value for key, value in mapped.items() if not is_empty_value(value)}
 
     @staticmethod
     def _build_device_to_r2c_mapper(
@@ -97,6 +116,18 @@ class ConfigurableDeviceTranslator(IDeviceTranslator):
         config_dict: Mapping[str, Any],
     ) -> ConfigDrivenMapper | None:
         cfg = config_dict.get("r2c_to_device", {})
+        if not isinstance(cfg, Mapping):
+            return None
+        mappings = cfg.get("mappings")
+        if isinstance(mappings, list) and mappings:
+            return ConfigDrivenMapper.from_rule_mappings(mappings)
+        return None
+
+    @staticmethod
+    def _build_teleop_to_device_mapper(
+        config_dict: Mapping[str, Any],
+    ) -> ConfigDrivenMapper | None:
+        cfg = config_dict.get("teleop_to_device", {})
         if not isinstance(cfg, Mapping):
             return None
         mappings = cfg.get("mappings")

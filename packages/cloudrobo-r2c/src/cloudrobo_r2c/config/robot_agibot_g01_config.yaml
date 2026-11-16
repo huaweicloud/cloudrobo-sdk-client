@@ -20,11 +20,12 @@
 # 安全提示：runtime.dry_run 默认 true（观测正常发布，动作只打日志不执行）；
 # 现场验证无误后再改为 false 真实执行。
 #
-# ★ 配置版本标记：config_rev: 2026-11-13-r3
+# ★ 配置版本标记：config_rev: 2026-11-16-r4
 #   含第 7/8 章路由（r2c_to_device 的 joint_names / left|right_pose_cmd_ee）、
 #   state/current 发布绑定（10Hz，collector=get_runtime）、末端位姿/夹爪
-#   观测发布位置单选（ee_pose_channel / gripper_channel，默认专用字段）与
-#   位姿角度表示选择（ee_pose_repr，quat/euler，对两种通道都生效）。
+#   观测发布位置单选（ee_pose_channel / gripper_channel，默认专用字段）、
+#   位姿角度表示选择（ee_pose_repr，quat/euler，对两种通道都生效）与
+#   遥操下发（teleop_to_device，方案 B：TeleopFrame → send_action 平铺字段）。
 #   现场核对：文件内应能搜到 "joint_names"。若与仓库最新不一致，
 #   请以仓库该文件为准，或重装包（pip install -e packages/cloudrobo-r2c）刷新
 #   安装目录内的打包副本。
@@ -255,6 +256,20 @@ r2c_to_device:
       use_assign_dotted: false
       required: false
 
+    # --- 单侧夹爪（按 names 定位；只出现一侧时适配器另一侧保持不动）。
+    #     与上面 2 通道互不冲突：适配器优先单侧字段，双侧齐全时等价 ---
+    - target: "left_gripper"
+      source: "end_effector_states.position"
+      source_name_ref: "left_gripper"
+      use_assign_dotted: false
+      required: false
+
+    - target: "right_gripper"
+      source: "end_effector_states.position"
+      source_name_ref: "right_gripper"
+      use_assign_dotted: false
+      required: false
+
     # --- 灵巧手 / 头部 / 腰部 / 底盘（可选：云端经 Actions.extensions 下发，缺失自动跳过） ---
     - target: "hand_cmd_joint_pos"
       source: "extensions.hand_joint"
@@ -285,5 +300,63 @@ r2c_to_device:
 
     - target: "right_pose_cmd_ee"
       source: "end_effector_poses.right.pose"
+      use_assign_dotted: false
+      required: false
+
+# ── 遥操 → 设备（方案 B：复用适配器 send_action；可选段，缺失时执行路径
+#    回退函数式默认转换，见 translators/teleop_translator.py）────────────────
+# 源 dict 为 TeleopFrame 展开后的字段（teleop.proto，2026-11-16 版）：
+#   end_effector_poses.{names,pose}          未握持的手不进消息（缺失侧保持不动）
+#   end_effector_poses.<side>.pose           按 names 归一化的每侧位姿通道
+#   end_effector_states.{names,position}     每手触发值 0..1
+#   teleop_gripper_positions                 双手触发值组合 [left, right]
+#   joint_states.{names,position}            预留（同构臂扩展）
+#   extensions.<key>                         手柄透传输入（已解码标量）
+# 规则语法与 r2c_to_device 完全一致（同一 MapperRule/transforms 引擎）。
+# 现场按 Pose7D 顺序 [x,y,z,qx,qy,qz,qw]（names left/right 时下标 0/1）；
+# 遥操语义由 SDK 执行路径保证：command 帧（teleop_command）不驱动设备、
+# 仅会话 RUNNING 且 session_id 匹配的动作帧才下发。
+teleop_to_device:
+  mappings:
+    # --- 生命周期命令帧（start/pause/resume/finish）：只输出会话字段、
+    #     不驱动设备；执行路径按 teleop_command 门控，动作帧该字段缺省 ---
+    - target: "teleop_command"
+      source: "command"
+      use_assign_dotted: false
+      required: false
+
+    # --- 双臂末端绝对位姿（按 names 归一化的并列通道；未握持的手不产出键，
+    #     required: false 自动跳过——缺失侧保持不动即安全信号） ---
+    - target: "left_pose_cmd_ee"
+      source: "end_effector_poses.left.pose"
+      use_assign_dotted: false
+      required: false
+
+    - target: "right_pose_cmd_ee"
+      source: "end_effector_poses.right.pose"
+      use_assign_dotted: false
+      required: false
+
+    # --- 夹持器（**左右分开**：遥操可能只有左手或只有右手握持，缺失侧
+    #     适配器取设备当前值保持不动；两侧齐全则同时下发） ---
+    - target: "left_gripper"
+      source: "end_effector_states.left.position"
+      use_assign_dotted: false
+      required: false
+
+    - target: "right_gripper"
+      source: "end_effector_states.right.position"
+      use_assign_dotted: false
+      required: false
+
+    # --- 关节空间（teleop.proto 预留；同构臂输入启用后逐维透传。
+    #     适配器按侧校验：只出现单侧关节名时另一侧保持不动） ---
+    - target: "joint_names"
+      source: "joint_states.names"
+      use_assign_dotted: false
+      required: false
+
+    - target: "arm_cmd_joint_pos"
+      source: "joint_states.position"
       use_assign_dotted: false
       required: false

@@ -951,16 +951,19 @@ def test_route_reject_partial_group():
     assert _last_controller().joint_calls == []
 
 
-def test_route_reject_partial_gripper():
-    # 夹爪仅一侧 → 不硬执行
+def test_route_single_side_gripper_keeps_other_side():
+    # 夹爪仅一侧 → 该侧下发，另一侧取设备当前值保持不动
     adapter = _connect()
+    before = _last_robot().gripper
     adapter.send_action(
         {
             "joint_names": ["left_gripper"],
             "arm_cmd_joint_pos": [0.25],
         }
     )
-    assert not any(c[0] == "move_gripper" for c in _last_robot().calls)
+    calls = [c for c in _last_robot().calls if c[0] == "move_gripper"]
+    assert calls, "expected move_gripper for single-side command"
+    assert calls[-1][1] == pytest.approx([0.25, before[1]])
 
 
 def test_route_reject_unknown_names():

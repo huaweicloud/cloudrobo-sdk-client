@@ -68,6 +68,14 @@
 - ``left_pose_cmd_ee`` / ``right_pose_cmd_ee``  — 来自 ``end_effector_poses.pose`` 的
   末端位姿（按长度识别：7 维 quat / 6 维 euler ZYX，euler 内部转 quat 下发；
   joint_states 位姿存在时优先用前者）
+- ``left_arm_joint_pos`` / ``right_arm_joint_pos`` — **单侧**关节目标（各 7 维；
+  缺失侧取设备当前关节值保持不动，绝不补零）
+- ``left_gripper`` / ``right_gripper``           — **单侧**夹爪目标（标量；
+  缺失侧取设备当前值保持不动）
+
+单侧通道用于遥操"只手握持"场景：操作端未握持的手不进消息，机器人侧另一侧
+保持当前值不动。``joint_states`` 的 names 路径同样支持单侧——每侧 7 关节
+齐全即可，另一侧保持不动；夹爪 names 支持只出现一侧。
 
 动作字段支持 ``ExtensionValue``（FLOAT32/FLOAT64，形状一维），云端可将头/腰/轮
 等扩展指令放进 ``Actions.extensions``，由适配器负责解码。
@@ -125,6 +133,19 @@ EXPECTED_DIMS: Dict[str, int] = {
     "wheel_cmd_speed": 2,
     "left_pose_cmd_ee": POSE_DOF,
     "right_pose_cmd_ee": POSE_DOF,
+    # 单侧通道（遥操单手握持等场景）：另一侧取设备当前值保持不动
+    "left_arm_joint_pos": ARM_DOF // 2,
+    "right_arm_joint_pos": ARM_DOF // 2,
+}
+
+# 单侧关节/夹爪字段 → 侧名（send_action 平铺字段）
+SIDE_ARM_CMD_KEYS: Dict[str, str] = {
+    "left_arm_joint_pos": "left",
+    "right_arm_joint_pos": "right",
+}
+SIDE_GRIPPER_CMD_KEYS: Dict[str, str] = {
+    "left_gripper": "left",
+    "right_gripper": "right",
 }
 
 # RobotController关节控制可用的部位组名（《指南》8.1 joint_group key）
@@ -728,14 +749,14 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
         ``joint_names``（``joint_states.names``）逐维解析并路由第 7 / 8 章控制，
         **互斥与完整性校验不通过时拒绝执行整条动作**：
 
-        - ``left_arm_joint_N`` / ``right_arm_joint_N``（逐维关节，须 14 维齐全）→
-          RobotDds ``move_arm``
+        - ``left_arm_joint_N`` / ``right_arm_joint_N``（逐维关节，每侧须 7 维齐全；
+          只出现一侧时另一侧保持当前值）→ RobotDds ``move_arm``
         - ``left_pose_x/y/z`` + ``left_pose_rx/ry/rz/rw``（四元数）或
           ``left_pose_roll/pitch/yaw``（欧拉角，ZYX）→ RobotController末端位姿
           ``set_end_effector_pose_control``；须各侧分量完整；与
           ``end_effector_poses.pose`` 同时存在时 joint_states 优先
-        - ``left_gripper`` / ``right_gripper``（两侧须同时出现）→ ``move_gripper``
-          （优先于 ``gripper_cmd_pos`` 通道）
+        - ``left_gripper`` / ``right_gripper``（可只出现一侧；缺失侧保持当前值）
+          → ``move_gripper``（优先于 ``gripper_cmd_pos`` 通道）
         - 全部 names 均为部位组名（每组 7 关节）→ RobotController ``set_joint_position_control``
         - 互斥规则：关节与末端位姿不得混用（含 ee 通道）；四元数与欧拉角不得混用
 
@@ -785,24 +806,41 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             if "left_pose_cmd_ee" in command or "right_pose_cmd_ee" in command:
                 executed += self._apply_ee_pose(client, {"left": {}, "right": {}}, command)
 
-        # —— 夹爪：joint_states 内 left_gripper/right_gripper 优先，回退原通道 ——
-        if parsed["gripper"].get("left") is not None or parsed["gripper"].get("right") is not None:
-            left_grip = parsed["gripper"].get("left")
-            right_grip = parsed["gripper"].get("right")
-            if left_grip is None or right_grip is None:
-                logger.warning(
-                    "[AgiBotG01] joint_states gripper needs both left_gripper and "
-                    "right_gripper; got %s; skipped",
-                    parsed["gripper"],
-                )
-            else:
-                client.move_gripper([left_grip, right_grip])
-                executed.append("joint_states_gripper")
+        # —— 夹爪：joint_states names 快照优先，其次单侧平铺字段，最后 2 通道 ——
+        # 单侧夹爪（遥操单手握持）：缺失侧取设备当前值补齐，实现"另一侧保持"
+        side_gripper: Dict[str, float] = {}
+        for key, side in SIDE_GRIPPER_CMD_KEYS.items():
+            if key not in command:
+                continue
+            values = self.as_float_list(command[key])
+            if not values:
+                logger.error("[AgiBotG01] action %s is empty; skipped", key)
+                continue
+            side_gripper[side] = values[0]
+
+        if parsed["gripper"]:
+            executed += self._apply_gripper(
+                client, parsed["gripper"], command.get("gripper_cmd_pos")
+            )
+        elif side_gripper:
+            executed += self._apply_gripper(client, side_gripper, None)
         elif "gripper_cmd_pos" in command:
             values = self.as_float_list(command["gripper_cmd_pos"])
             if self._check_dims("gripper_cmd_pos", values):
                 client.move_gripper(values)
                 executed.append("gripper_cmd_pos")
+
+        # —— 单侧关节平铺字段（left_arm_joint_pos / right_arm_joint_pos）——
+        side_arm: Dict[str, List[float]] = {}
+        for key, side in SIDE_ARM_CMD_KEYS.items():
+            if key not in command:
+                continue
+            values = self.as_float_list(command[key])
+            if not self._check_dims(key, values):
+                continue
+            side_arm[side] = values
+        if side_arm:
+            executed += self._apply_side_arm(client, side_arm)
 
         # —— RobotDds其余部位（灵巧手/头/腰） ——
         handlers = (
@@ -834,6 +872,95 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             )
         else:
             logger.debug("[AgiBotG01] executed actions: %s", executed)
+
+    def _apply_gripper(
+        self,
+        client: AgiBotG01Client,
+        sides: Mapping[str, float],
+        fallback: Any = None,
+    ) -> List[str]:
+        """夹爪下发：双侧齐全直接下发；单侧用设备当前值补齐另一侧（保持不动）。
+
+        Args:
+            sides: ``{"left": value, "right": value}``，可只含一侧。
+            fallback: ``gripper_cmd_pos`` 通道值（2 维）；当前值读取失败时兜底。
+
+        Returns:
+            已执行的部位名列表（未执行为空）。
+        """
+        left = sides.get("left")
+        right = sides.get("right")
+        if left is None and right is None:
+            return []
+        if left is not None and right is not None:
+            client.move_gripper([float(left), float(right)])
+            return ["gripper"]
+
+        # 单侧：读设备当前另一侧值补齐（读取失败 → 尝试 fallback → 跳过）
+        hold = self._current_gripper(client)
+        if hold is None:
+            values = self.as_float_list(fallback) if fallback is not None else []
+            hold = values if len(values) == GRIPPER_DOF else None
+        if hold is None:
+            logger.warning(
+                "[AgiBotG01] single-side gripper %s without current state; "
+                "skipped to avoid moving the other side",
+                sides,
+            )
+            return []
+        if left is None:
+            left = hold[0]
+        if right is None:
+            right = hold[1]
+        client.move_gripper([float(left), float(right)])
+        return ["gripper(single_side)"]
+
+    def _current_gripper(self, client: AgiBotG01Client) -> Optional[List[float]]:
+        """读取设备当前夹爪值 ``[left, right]``（原始量程）；失败返回 None。"""
+        values = self._safe_state(client.gripper_states)
+        if values is None or values.shape[0] != GRIPPER_DOF:
+            return None
+        return values.astype(float).tolist()
+
+    def _apply_side_arm(
+        self,
+        client: AgiBotG01Client,
+        sides: Mapping[str, List[float]],
+    ) -> List[str]:
+        """单侧关节下发：缺失侧取设备当前关节值补齐（保持不动）。
+
+        每侧须 7 维齐全（不完整的一侧拒绝，不做补帧）。
+        """
+        for side, values in sides.items():
+            if len(values) != ARM_DOF // 2:
+                logger.error(
+                    "[AgiBotG01] %s_arm_joint_pos expects %d values, got %d; skipped",
+                    side,
+                    ARM_DOF // 2,
+                    len(values),
+                )
+                return []
+        hold = self._current_arm(client)
+        if hold is None:
+            logger.warning(
+                "[AgiBotG01] single-side arm joints %s without current state; skipped",
+                sorted(sides),
+            )
+            return []
+        arm = list(hold)
+        for side, values in sides.items():
+            offset = 0 if side == "left" else ARM_DOF // 2
+            arm[offset : offset + ARM_DOF // 2] = [float(v) for v in values]
+        self._ensure_motion_mode(client, self._dds_motion_mode)
+        client.move_arm(arm)
+        return [f"joint(single_side:{'+'.join(sorted(sides))})"]
+
+    def _current_arm(self, client: AgiBotG01Client) -> Optional[List[float]]:
+        """读取设备当前双臂关节值（14 维）；失败返回 None。"""
+        values = self._safe_state(client.arm_joint_states)
+        if values is None or values.shape[0] != ARM_DOF:
+            return None
+        return values.astype(float).tolist()
 
     # ------------------------------------------------------------------
     # 第 7 / 8 章路由（《指南》8.1）
@@ -928,8 +1055,9 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
           也不得再经 ``end_effector_poses`` 通道下发位姿）
         - 四元数（``rx/ry/rz/rw``）与欧拉角（``roll/pitch/yaw``）互斥，
           且左右侧表示须一致
-        - 关节须 14 维齐全、组须 7 关节、位姿分量须完整、夹爪须两侧同时出现
-          ——不全不硬执行
+        - 关节按侧完整性校验：出现的每一侧须 7 维齐全（单侧允许，另一侧
+          保持不动）；组须 7 关节；位姿分量须完整——不全不硬执行
+        - 夹爪允许单侧（缺失侧保持不动）
         - 未知 names 视为协议不一致，拒绝执行
         """
         has_pose = bool(parsed["poses"]["left"] or parsed["poses"]["right"])
@@ -981,19 +1109,22 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             if len(reprs) > 1:
                 return "四元数与欧拉角互斥（左右侧表示不一致）"
 
-        # RobotDds关节须 14 关节齐全（不补帧、不部分执行）
+        # RobotDds关节：出现的每一侧须 7 维齐全（单侧允许——另一侧保持不动；
+        # 不完整的一侧不硬执行、不做补帧）
         if has_joint:
-            missing = sorted(set(range(ARM_DOF)) - set(parsed["joints"]))
-            if missing:
-                return f"双臂关节不全（14 维须齐全），缺少索引 {missing}，不硬执行"
+            for side, offset in (("left", 0), ("right", ARM_DOF // 2)):
+                present = [i for i in parsed["joints"] if offset <= i < offset + ARM_DOF // 2]
+                if not present:
+                    continue
+                missing = sorted(set(range(offset, offset + ARM_DOF // 2)) - set(parsed["joints"]))
+                if missing:
+                    return f"{side} 臂关节不全（该侧 7 维须齐全），缺少索引 {missing}，不硬执行"
         if has_groups:
             for name, segment in parsed["groups"].items():
                 if len(segment) != 7:
                     return f"部位组 {name} 关节不全（须 7 维），不硬执行"
 
-        # 夹爪两侧须同时出现
-        if has_gripper and ("left" not in parsed["gripper"] or "right" not in parsed["gripper"]):
-            return "夹爪不全：left_gripper 与 right_gripper 须同时出现，不硬执行"
+        # 夹爪允许单侧（另一侧取设备当前值保持不动）：无需两侧同时出现
 
         # 未知 names 视为协议不一致
         if parsed["unknown"]:
@@ -1001,9 +1132,7 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
 
         # 关节与末端互斥（ee 通道）
         if ee_pose_present and (has_joint or has_groups):
-            return (
-                "关节与末端位姿互斥：joint_states 含关节分量时不得经 " "end_effector_poses 下发位姿"
-            )
+            return "关节与末端位姿互斥：joint_states 含关节分量时不得经 end_effector_poses 下发位姿"
 
         # 旧位置式兼容：无 names 时 position 须含前 14 维双臂关节
         if (
@@ -1027,7 +1156,7 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
         - ``"robot_controller"`` → ``RobotController.set_joint_position_control``
         """
         self._ensure_motion_mode(client, self._dds_motion_mode)
-        arm = self._resolve_arm_values(joints_by_idx, position_values)
+        arm = self._resolve_arm_values(client, joints_by_idx, position_values)
         if arm is None:
             return []
         if self._joint_control_interface == "robot_controller":
@@ -1037,14 +1166,22 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
         client.move_arm(arm)
         return ["joint_states_arm"]
 
-    @staticmethod
     def _resolve_arm_values(
+        self,
+        client: AgiBotG01Client,
         joints_by_idx: Dict[int, float],
         position_values: Optional[List[float]],
     ) -> Optional[List[float]]:
-        """从解析结果组装 14 维双臂关节值；不完整返回 None。"""
+        """从解析结果组装 14 维双臂关节值；无法组装返回 None。
+
+        单侧关节（遥操单手握持等）：缺失侧取设备当前关节值保持不动——
+        绝不补零，避免未下发的一侧被拉到零位。
+        """
         if joints_by_idx:
-            arm = [0.0] * ARM_DOF
+            arm = self._current_arm(client)
+            if arm is None:
+                logger.warning("[AgiBotG01] single-side arm joints without current state; skipped")
+                return None
             for idx, value in joints_by_idx.items():
                 arm[idx] = value
             return arm
@@ -1160,7 +1297,7 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             qx, qy, qz, qw = _euler_rpy_to_quat(dims["roll"], dims["pitch"], dims["yaw"])
             return [x, y, z, qx, qy, qz, qw]
         logger.error(
-            "[AgiBotG01] %s_pose dims incomplete (need rx..rw or roll/pitch/yaw): %s; " "skipped",
+            "[AgiBotG01] %s_pose dims incomplete (need rx..rw or roll/pitch/yaw): %s; skipped",
             side,
             sorted(dims),
         )

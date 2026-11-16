@@ -1488,13 +1488,16 @@ def collect_mapping_config_errors(config: Mapping[str, Any]) -> List[str]:
     - ``images.*`` 目标缺少编码 transform / 未知 transformer
     - ``default`` 值无法按 extension 的 dtype/shape 编码(严格预验)
 
+    校验段：``device_to_r2c`` / ``r2c_to_device`` / ``teleop_to_device``
+    （遥操帧 → 设备命令，与 ``r2c_to_device`` 同构的可选段，缺失合法）。
+
     Returns an empty list when the mapping sections are absent or fully
     valid.  Sections that are missing or not mappings are tolerated here
     — the CLI's pydantic layer (``RobotConfig``) enforces their presence.
     """
     errors: List[str] = []
     transformers = build_transformer_registry()
-    for section_key in ("device_to_r2c", "r2c_to_device"):
+    for section_key in ("device_to_r2c", "r2c_to_device", "teleop_to_device"):
         section = config.get(section_key)
         if not isinstance(section, Mapping):
             continue
