@@ -35,7 +35,7 @@ message TeleopFrame {
   // Input mode of the session, set together with the start command (and
   // carried on later frames too). Was TeleopStart.input_mode; promoted to
   // the frame level so all four lifecycle commands are empty messages.
-  InputMode input_mode = 14;
+  InputMode input_mode = 12;
 
   // Session lifecycle command. Only present on control frames;
   // action frames leave this unset.
