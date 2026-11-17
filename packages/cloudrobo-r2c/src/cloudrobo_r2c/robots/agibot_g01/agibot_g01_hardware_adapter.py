@@ -292,6 +292,8 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             camera_key_map if camera_key_map else DEFAULT_CAMERA_KEY_MAP
         )
         self._camera_poll_interval_s = float(self._config.get("camera_poll_interval_s", 0.03))
+        # 相机通道序：GDK 输出 RGB；转成 OpenCV JPEG 编码所需的 BGR（可配 "bgr" 关闭）
+        self._camera_color_order = str(self._config.get("camera_color_order", "rgb")).strip().lower()
         self._enable_motion_controller = bool(self._config.get("enable_motion_controller", True))
         self._control_lifetime_s = float(self._config.get("control_lifetime_s", 1.0))
         self._pose_control_group = list(
@@ -376,6 +378,7 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             init_wait_s=self._init_wait_s,
             camera_poll_interval_s=self._camera_poll_interval_s,
             enable_motion_controller=self._enable_motion_controller,
+            camera_color_order=self._camera_color_order,
         )
         try:
             client.connect()

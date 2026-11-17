@@ -85,6 +85,35 @@ def test_factory_creates_adapter_with_defaults():
     # 默认启用相机并映射到 R2C 键
     assert adapter._camera_enabled is True
     assert adapter._camera_key_map["head"] == "cam_high"
+    # GDK 输出 RGB，默认按 RGB 源做通道归一化（发布 JPEG 前转 BGR）
+    assert adapter._camera_color_order == "rgb"
+
+
+def test_camera_channel_order_normalization():
+    """camera_color_order="rgb" → 通道反转；"bgr" → 原样。"""
+    import numpy as np
+    from cloudrobo_r2c.robots.agibot_g01.agibot_g01_client import AgiBotG01Client
+
+    color = np.array([[[10, 20, 30], [1, 2, 3]]], dtype=np.uint8)
+
+    client = AgiBotG01Client(camera_group=["head"], camera_color_order="rgb")
+    camera = FakeCosineCamera(["head"])
+    camera.frames["head"] = color
+    client._camera = camera
+    client._poll_camera_once()
+    stored = client.get_camera_images()["head"]
+    assert list(stored[0, 0]) == [30, 20, 10]
+    assert list(stored[0, 1]) == [3, 2, 1]
+
+    client = AgiBotG01Client(camera_group=["head"], camera_color_order="bgr")
+    camera = FakeCosineCamera(["head"])
+    camera.frames["head"] = color
+    client._camera = camera
+    client._poll_camera_once()
+    assert list(client.get_camera_images()["head"][0, 0]) == [10, 20, 30]
+
+    with pytest.raises(ValueError, match="camera_color_order"):
+        AgiBotG01Client(camera_color_order="rgba")
 
 
 def test_connect_disconnect_lifecycle():

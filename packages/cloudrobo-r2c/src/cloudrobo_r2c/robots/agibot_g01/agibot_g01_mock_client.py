@@ -157,6 +157,7 @@ class AgiBotG01MockClient:
         init_wait_s: float = 0.0,
         camera_poll_interval_s: float = 0.03,
         enable_motion_controller: bool = True,
+        camera_color_order: str = "rgb",
         initial_joints: Optional[Sequence[float]] = None,
         initial_gripper: Optional[Sequence[float]] = None,
         initial_ee_poses: Optional[Dict[str, Sequence[float]]] = None,
@@ -175,6 +176,13 @@ class AgiBotG01MockClient:
         self._camera_key_map: Dict[str, str] = dict(camera_key_map or {})
         self._camera_enabled = bool(camera_enabled)
         self._camera_poll_interval_s = float(camera_poll_interval_s)
+        # 与真机客户端一致：GDK 语义为 RGB 源，转成 OpenCV 编码所需 BGR
+        self._camera_color_order = str(camera_color_order).strip().lower()
+        if self._camera_color_order not in ("rgb", "bgr"):
+            raise ValueError(
+                "camera_color_order must be 'rgb' or 'bgr', "
+                f"got {camera_color_order!r}"
+            )
         self._init_wait_s = float(init_wait_s)
         self._enable_motion_controller = bool(enable_motion_controller)
 
@@ -481,6 +489,8 @@ class AgiBotG01MockClient:
             image[:, :, 0] = xs[None, :]
             image[:, :, 1] = ys[:, None]
             image[:, :, 2] = (index * 60 + 40) % 256
+            if self._camera_color_order == "rgb":
+                image = np.ascontiguousarray(image[:, :, ::-1])
             frames[name] = image
         return frames
 

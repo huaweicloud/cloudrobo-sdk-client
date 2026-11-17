@@ -87,6 +87,7 @@ class AgiBotG01Client:
         init_wait_s: float = 0.5,
         camera_poll_interval_s: float = 0.03,
         enable_motion_controller: bool = True,
+        camera_color_order: str = "rgb",
     ) -> None:
         self._lock = threading.RLock()
         self._camera_group: List[str] = list(
@@ -99,6 +100,14 @@ class AgiBotG01Client:
         self._init_wait_s = float(init_wait_s)
         self._camera_poll_interval_s = float(camera_poll_interval_s)
         self._enable_motion_controller = enable_motion_controller
+        # GDK CosineCamera 输出 RGB 通道序；OpenCV 的 JPEG 编码（ndarray_to_jpeg）
+        # 期望 BGR，因此入缓存前统一做一次通道反转（可配关闭）。
+        self._camera_color_order = str(camera_color_order).strip().lower()
+        if self._camera_color_order not in ("rgb", "bgr"):
+            raise ValueError(
+                "camera_color_order must be 'rgb' or 'bgr', "
+                f"got {camera_color_order!r}"
+            )
 
         self._robot: Any = None
         self._camera: Any = None
@@ -342,6 +351,12 @@ class AgiBotG01Client:
         with self._lock:
             return dict(self._latest_images)
 
+    def _normalize_camera_frame(self, arr: Any) -> Any:
+        """按 camera_color_order 归一化通道序（RGB 源 → BGR，供 OpenCV 编码）。"""
+        if self._camera_color_order == "rgb" and arr.ndim == 3 and arr.shape[2] == 3:
+            return np.ascontiguousarray(arr[:, :, ::-1])
+        return arr
+
     def _start_camera_capture(self) -> None:
         # 先同步采一轮，保证 connect() 返回后首次观测即可拿到图像
         self._poll_camera_once()
@@ -378,6 +393,7 @@ class AgiBotG01Client:
             arr = np.asarray(image)
             if arr.size == 0 or np.all(arr == 0):
                 continue  # 相机未就绪时可能返回全零占位帧
+            arr = self._normalize_camera_frame(arr)
             with self._lock:
                 self._latest_images[name] = arr
 
@@ -396,6 +412,7 @@ class AgiBotG01Client:
                     arr = np.asarray(image)
                     if arr.size == 0 or np.all(arr == 0):
                         continue  # 相机未就绪时可能返回全零占位帧
+                    arr = self._normalize_camera_frame(arr)
                     with self._lock:
                         self._latest_images[name] = arr
             except Exception as exc:

@@ -149,6 +149,7 @@ class AgiBotG01MockAdapter(AgiBotG01HardwareAdapter):
             init_wait_s=self._init_wait_s,
             camera_poll_interval_s=self._camera_poll_interval_s,
             enable_motion_controller=self._enable_motion_controller,
+            camera_color_order=self._camera_color_order,
             initial_joints=self._initial_joints,
             initial_gripper=self._initial_gripper,
             initial_ee_poses=self._initial_ee_poses,

@@ -85,6 +85,9 @@ hardware:
       head: "cam_high"
       hand_left: "cam_left_wrist"
       hand_right: "cam_right_wrist"
+    # 相机通道序：GDK CosineCamera 输出 RGB，发布前统一转成 OpenCV 编码所需的 BGR
+    # （如现场实际为 BGR，可改为 "bgr" 关闭转换）
+    camera_color_order: "rgb"
     # 相机取流线程轮询间隔（秒），默认 0.03 ≈ 30Hz
     # camera_poll_interval_s: 0.03
     # RobotController（末端位姿/关节控制；创建失败自动降级为仅RobotDds 关节控制）
