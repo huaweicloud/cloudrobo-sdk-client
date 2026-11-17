@@ -52,3 +52,19 @@ def test_runtime_message_roundtrip_keeps_end_effector_poses():
     assert list(back.end_effector_poses.names) == ["left", "right"]
     assert list(back.end_effector_poses.pose[0]) == pytest.approx(LEFT_POSE)
     assert list(back.end_effector_poses.pose[1]) == pytest.approx(RIGHT_POSE)
+
+
+def test_state_current_frame_carries_end_effector_poses_end_to_end():
+    """适配器 get_runtime → RunTimeMessage → protobuf → 解析，末端仍在。"""
+    from cloudrobo_r2c.robots.agibot_g01.agibot_g01_mock_adapter import (
+        create_agibot_g01_mock_adapter,
+    )
+
+    adapter = create_agibot_g01_mock_adapter({"camera_enabled": False})
+    adapter.connect()
+    frame = dict(adapter.get_runtime())
+    assert "end_effector_poses" in frame, sorted(frame)
+    message = RunTimeMessage.from_dict(frame)
+    back = RunTimeMessage.from_protobuf(message.to_protobuf().SerializeToString())
+    assert list(back.end_effector_poses.names) == ["left", "right"]
+    assert len(back.end_effector_poses.pose) == 2

@@ -628,8 +628,17 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
         try:
             status = client.get_motion_status()
         except Exception as exc:
-            # RobotController 不可用（禁用/失败降级）属正常路径，debug 级即可
-            logger.debug("[AgiBotG01] get_motion_status unavailable: %s", exc)
+            # RobotController 不可用（禁用/失败降级）会让末端位姿彻底缺失，
+            # 表现为观测与 state/current 都没有 end_effector_poses——现场需要
+            # 一条明确的警告（限频一次），而不是只看 debug。
+            if not self._motion_status_warned:
+                self._motion_status_warned = True
+                logger.warning(
+                    "[AgiBotG01] RobotController 不可用（%s）：末端位姿不可用，"
+                    "观测与 state/current 将不含 end_effector_poses。"
+                    "请确认 enable_motion_controller 已开启、机器人处于 Copilot 模式",
+                    exc,
+                )
             return
         if not isinstance(status, Mapping):
             if not self._motion_status_warned:
