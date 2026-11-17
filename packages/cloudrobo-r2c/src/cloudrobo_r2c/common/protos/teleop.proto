@@ -29,39 +29,39 @@ message TeleopFrame {
   // Operator identity.
   string operator_id = 2;
 
-  // Session ID (set on start, empty otherwise).
-  string session_id = 3;
-
   // Input mode of the session, set together with the start command (and
   // carried on later frames too). Was TeleopStart.input_mode; promoted to
-  // the frame level so all four lifecycle commands are empty messages.
-  InputMode input_mode = 12;
+  // the frame level so all lifecycle commands are empty messages.
+  InputMode input_mode = 3;
+
+  // Session ID (set on start, empty otherwise).
+  string session_id = 4;
 
   // Session lifecycle command. Only present on control frames;
   // action frames leave this unset.
   oneof command {
-    TeleopStart start = 4;
-    TeleopPause pause = 5;
-    TeleopResume resume = 6;
-    TeleopFinish finish = 7;
-    TeleopQuit quit = 8;
+    TeleopStart start = 5;
+    TeleopPause pause = 6;
+    TeleopResume resume = 7;
+    TeleopFinish finish = 8;
+    TeleopQuit quit = 9;
   }
 
   // Joint states. Mirrors action.proto's JointAction with the chunk-level
   // repeated removed (a teleop frame carries exactly one chunk): names plus
   // a single step per channel, where the step itself still holds one value
   // per joint.
-  TeleopJointStates joint_states = 9;
+  TeleopJointStates joint_states = 10;
 
   // Per-hand absolute poses. action.proto's map<string,
   // EndEffectorPoseChunk> shape with the chunk-level repeated removed: one
   // TeleopEndEffectorPose per hand (key = hand name).
-  TeleopEndEffectorPoses end_effector_poses = 10;
+  TeleopEndEffectorPoses end_effector_poses = 11;
 
   // Per-hand trigger values (action.proto's EndEffectorStateAction with the
   // chunk-level repeated removed; the step's data carries one trigger per
   // hand).
-  TeleopEndEffectorStates end_effector_states = 11;
+  TeleopEndEffectorStates end_effector_states = 12;
 
   // Raw headset control inputs (A/X, thumbstick button, thumbstick axes),
   // attached to action frames as a passthrough for downstream logic.

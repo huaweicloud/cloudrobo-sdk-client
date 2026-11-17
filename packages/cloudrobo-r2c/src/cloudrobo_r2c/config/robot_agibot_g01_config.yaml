@@ -59,6 +59,8 @@ hardware:
     # state/current 帧 location（"当前朝向;当前地理位置" 格式，可按需修改；
     # G01 适配器不做朝向推算，此处直接配置地理位置）
     location: "广东深圳坂田基地E3实验室"
+    # orientation: 朝向（度，[0,360)）；state/current 的 orientation 字段取此值
+    # orientation: 0.0
     # ── 末端位姿/夹爪观测发布位置（观测与 state/current 同一选择，单选互斥，
     #    不可同时发）───────────────────────────────────────────────────
     # ee_pose_channel: 末端位姿发到哪

@@ -142,6 +142,8 @@ class RuntimeEndEffectorPosesMessage:
 class RunTimeMessage:
     timestamp: int
     location: str = ""
+    # 朝向（度，[0,360)）
+    orientation: float = 0.0
     # 数据来源（发布时由 session._ensure_state_source 填充）
     source: str = ""
     joint_states: RuntimeJointStatesMessage = field(
@@ -190,6 +192,7 @@ class RunTimeMessage:
         return cls(
             timestamp=data["timestamp"],
             location=data.get("location", ""),
+            orientation=float(data.get("orientation", 0.0)),
             source=data.get("source", ""),
             joint_states=RuntimeJointStatesMessage.from_dict(joint_raw),
             end_effector_states=RuntimeEndEffectorStatesMessage.from_dict(ee_states_raw),
@@ -207,6 +210,7 @@ class RunTimeMessage:
         return cls(
             timestamp=pb.timestamp,
             location=pb.location,
+            orientation=float(pb.orientation),
             source=pb.source,
             joint_states=RuntimeJointStatesMessage(
                 type=list(pb.joint_states.type) or list(TYPE_JOINT_STATES),
@@ -242,6 +246,7 @@ class RunTimeMessage:
         pb.source = self.source
         pb.timestamp = int(self.timestamp)
         pb.location = self.location
+        pb.orientation = float(self.orientation)
         pb.joint_states.type.extend(self.joint_states.type or TYPE_JOINT_STATES)
         pb.joint_states.names.extend(self.joint_states.names)
         pb.joint_states.position.extend(self.joint_states.position)
@@ -287,6 +292,7 @@ class RunTimeMessage:
         return {
             "source": self.source,
             "timestamp": self.timestamp,
+            "orientation": self.orientation,
             "location": self.location,
             "joint_states": self.joint_states.to_dict(),
             "end_effector_states": self.end_effector_states.to_dict(),

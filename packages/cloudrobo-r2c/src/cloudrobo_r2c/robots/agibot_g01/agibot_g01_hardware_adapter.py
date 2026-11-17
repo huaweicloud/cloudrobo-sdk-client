@@ -540,6 +540,7 @@ class AgiBotG01HardwareAdapter(IRobotHardwareAdapter):
             positions += [float(v) for v in source[gripper_key]]
         frame: Dict[str, Any] = {
             "timestamp": int(time.time() * 1000),
+            "orientation": float(self._config.get("orientation", 0.0)),
             "location": str(self._config.get("location", "")),
             "joint_states": {
                 "type": [f"J{i}" for i in range(1, len(names) + 1)],

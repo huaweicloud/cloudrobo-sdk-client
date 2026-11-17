@@ -227,6 +227,7 @@ class LeRobotHardwareAdapter(IRobotHardwareAdapter, ICameraFrameSource):
             torque = []
         return {
             "timestamp": int(time.time() * 1000),
+            "orientation": float(self.config.get("orientation", 0.0)),
             "location": str(self.config.get("location", "")),
             "joint_states": {
                 "type": [f"J{i}" for i in range(1, len(names) + 1)],
